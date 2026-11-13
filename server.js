@@ -3917,6 +3917,77 @@ document.getElementById('srcSearch').addEventListener('input', function(e){
   }));
 });
 
+// ==================== OWNER PREMIUM KEY TOOL ====================
+app.get("/admin/premium-keys", isAdmin, (req, res) => {
+  const pkeys = readPremiumKeys();
+  const unused = pkeys.filter(k => !k.redeemedBy).length;
+  const body = `<main class="wrap" style="padding-bottom:60px">
+    <div class="workspace-panel page-head">
+      <div class="panel-kicker">OWNER TOOL / PREMIUM KEYS</div>
+      <h1>Create Premium keys</h1>
+      <p>Generate redeemable THE LAB keys from the website. This area is restricted to the owner account.</p>
+    </div>
+    <section class="workspace-grid" style="margin-top:18px">
+      <div class="workspace-panel">
+        <h2>Key settings</h2>
+        <p class="panel-copy">Choose the plan, duration, and number of keys to create.</p>
+        <form id="premiumKeyForm" class="form" style="margin-top:18px;grid-template-columns:1fr 1fr">
+          <label class="l">Plan<select id="plan"><option value="premium">Premium</option><option value="ultra">Ultra Premium</option></select></label>
+          <label class="l">Duration<select id="duration"><option value="7d">7 days</option><option value="30d" selected>30 days</option><option value="90d">90 days</option><option value="1y">1 year</option><option value="lifetime">Lifetime</option></select></label>
+          <label class="l" style="grid-column:1/-1">Amount (1–50)<input id="amount" type="number" min="1" max="50" value="1" required></label>
+          <button class="btn btn-gold" id="createBtn" type="submit" style="grid-column:1/-1">Create Premium keys</button>
+        </form>
+        <div id="keyResult" style="display:none;margin-top:18px">
+          <div class="alert gold"><span id="resultSummary"></span><button class="btn btn-ghost btn-sm" type="button" onclick="downloadKeys()">Download .txt</button></div>
+          <textarea id="keyOutput" class="mono" rows="8" readonly></textarea>
+          <button class="btn btn-ghost btn-sm" type="button" onclick="copyKeys()" style="margin-top:10px">Copy keys</button>
+        </div>
+      </div>
+      <aside class="workspace-panel">
+        <div class="panel-kicker">KEY INVENTORY</div>
+        <h2>${unused} unused key${unused === 1 ? "" : "s"}</h2>
+        <p class="panel-copy">New keys use the THELAB format and can be redeemed once at the Premium redemption page.</p>
+        <div class="kv" style="margin-top:18px"><div><span>Total generated</span><b>${pkeys.length}</b></div><div><span>Unused</span><b>${unused}</b></div><div><span>Format</span><b class="mono">THELAB-...</b></div></div>
+      </aside>
+    </section>
+  </main>`;
+  const script = `
+var lastKeys=[];
+function durationMs(v){if(v==='lifetime')return null;var m={"7d":7,"30d":30,"90d":90,"1y":365};return (m[v]||30)*86400000;}
+$('premiumKeyForm').addEventListener('submit',async function(e){
+  e.preventDefault();
+  var btn=$('createBtn');btn.disabled=true;btn.textContent='Creating...';
+  try{
+    var r=await fetch('/admin/premium-keys/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan:$('plan').value,durationMs:durationMs($('duration').value),amount:Number($('amount').value)})});
+    var d=await r.json().catch(function(){return {};});
+    if(!r.ok){toast(d.error||'Could not create keys','err');return;}
+    lastKeys=d.keys||[];$('keyOutput').value=lastKeys.join('\n')+'\n';$('resultSummary').textContent=lastKeys.length+' key(s) created';$('keyResult').style.display='block';toast('Premium keys created','ok');
+  }catch(err){toast('Server error','err');}finally{btn.disabled=false;btn.textContent='Create Premium keys';}
+});
+function copyKeys(){copyText(lastKeys.join('\n'));}
+function downloadKeys(){var b=new Blob([lastKeys.join('\n')+'\n'],{type:'text/plain'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='the-lab-premium-keys.txt';a.click();URL.revokeObjectURL(a.href);}
+`;
+  res.send(page({ req, title: "THE LAB — Premium Keys", active: "admin", body, script }));
+});
+
+app.post("/admin/premium-keys/create", isAdmin, (req, res) => {
+  const { durationMs, amount } = req.body || {};
+  const plan = String(req.body.plan || "premium").toLowerCase() === "ultra" ? "ultra" : "premium";
+  const isLifetime = durationMs === null || durationMs === undefined;
+  if (!isLifetime && (typeof durationMs !== "number" || durationMs < 60 * 1000)) return res.status(400).json({ error: "Choose a valid duration." });
+  const n = Math.min(Math.max(parseInt(amount, 10) || 1, 1), 50);
+  const all = readPremiumKeys();
+  const created = [];
+  for (let i = 0; i < n; i++) {
+    let key;
+    do { key = generatePremiumKey(); } while (all.some(k => k.key === key));
+    all.push({ key, plan, durationMs: isLifetime ? null : durationMs, createdBy: String(req.session.user.id), createdAt: new Date().toISOString(), redeemedBy: null, redeemedAt: null });
+    created.push(key);
+  }
+  writePremiumKeys(all);
+  return res.json({ success: true, keys: created, plan, lifetime: isLifetime, durationMs: isLifetime ? null : durationMs });
+});
+
 // ==================== ADMIN PAGE ====================
 
 app.get("/admin/dashboard", isAdmin, (req, res) => {
@@ -3938,7 +4009,8 @@ app.get("/admin/dashboard", isAdmin, (req, res) => {
     <h1>Admin overview</h1>
     <div class="kv">${rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join("")}</div>
     <div class="stack">
-      <a class="btn btn-gold btn-block" href="/admin/sources">🕵️ Player Source</a>
+      <a class="btn btn-gold btn-block" href="/admin/premium-keys">🔑 Premium Keys</a>
+      <a class="btn btn-ghost btn-block" href="/admin/sources">🕵️ Player Source</a>
       <a class="btn btn-ghost btn-block" href="/dashboard">Back to dashboard</a>
     </div>
   </div></main>`;
