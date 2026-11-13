@@ -953,153 +953,45 @@ const extras = createExtras({
 
 const commands = [
   new SlashCommandBuilder()
-    .setName("setuppanel")
-    .setDescription("Setup panel embed with script selection (Free: 3 · Premium: 10 · Ultra: unlimited)")
-    .addStringOption(o => o.setName("title").setDescription("Title").setRequired(true))
-    .addStringOption(o => o.setName("description").setDescription("Description").setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName("whitelistrole")
-    .setDescription("Set admin role")
-    .addRoleOption(o => o.setName("role").setDescription("Role").setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
-    .setName("setbuyerrole")
-    .setDescription("Set buyer role for specific script")
-    .addRoleOption(o => o.setName("role").setDescription("Role").setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
-    .setName("genkey")
-    .setDescription("Generate key")
-    .addIntegerOption(o => o.setName("days").setDescription("Duration in days (0=lifetime)").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setDescription("Number of keys").setRequired(false)),
-
-  new SlashCommandBuilder()
     .setName("massgenkey")
     .setDescription("Generate multiple keys and download them as a TXT file")
     .addIntegerOption(o => o.setName("days").setDescription("Duration in days (0=lifetime)").setRequired(true))
     .addIntegerOption(o => o.setName("amount").setDescription("Number of keys (1-500)").setMinValue(1).setMaxValue(500).setRequired(true)),
-
   new SlashCommandBuilder()
-    .setName("whitelist")
-    .setDescription("Whitelist a user/role for one of your scripts")
-    .addIntegerOption(o => o.setName("days").setDescription("Duration in days (0=lifetime)").setRequired(true))
-    .addUserOption(o => o.setName("user").setDescription("User").setRequired(false))
-    .addRoleOption(o => o.setName("role").setDescription("Role").setRequired(false)),
-
-  new SlashCommandBuilder()
-    .setName("blacklist")
-    .setDescription("Blacklist user")
-    .addUserOption(o => o.setName("user").setDescription("User").setRequired(true))
-    .addStringOption(o => o.setName("reason").setDescription("Reason").setRequired(false)),
-
-  new SlashCommandBuilder()
-    .setName("blacklistrole")
-    .setDescription("[PREMIUM] Blacklist a role from using scripts")
-    .addRoleOption(o => o.setName("role").setDescription("Role to blacklist").setRequired(true))
-    .addStringOption(o => o.setName("reason").setDescription("Reason").setRequired(false)),
-
-  new SlashCommandBuilder()
-    .setName("unblacklist")
-    .setDescription("Unblacklist user or role (role is PREMIUM only)")
-    .addUserOption(o => o.setName("user").setDescription("User").setRequired(false))
-    .addRoleOption(o => o.setName("role").setDescription("Role (PREMIUM only)").setRequired(false)),
-
-  new SlashCommandBuilder()
-    .setName("revoke")
-    .setDescription("Revoke key/user")
-    .addStringOption(o => o.setName("key").setDescription("Key").setRequired(false))
-    .addUserOption(o => o.setName("user").setDescription("User").setRequired(false)),
-
-  new SlashCommandBuilder()
-    .setName("listkeys")
-    .setDescription("View all keys"),
-
-  new SlashCommandBuilder()
-    .setName("userinfo")
-    .setDescription("View user info")
-    .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName("deletescript")
-    .setDescription("Delete your script from THE LAB"),
-
-  new SlashCommandBuilder()
-    .setName("freemode")
-    .setDescription("[PREMIUM] Enable or disable free mode for a script"),
-
+    .setName("setuppanel")
+    .setDescription("Set up a script panel")
+    .addStringOption(o => o.setName("title").setDescription("Panel title").setRequired(true))
+    .addStringOption(o => o.setName("description").setDescription("Panel description").setRequired(true)),
   new SlashCommandBuilder()
     .setName("resethwid")
-    .setDescription("Reset HWID for user")
-    .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
-
+    .setDescription("Reset a user's HWID")
+    .addUserOption(o => o.setName("user").setDescription("User whose HWID should be reset").setRequired(true)),
   new SlashCommandBuilder()
-    .setName("resethwiduser")
-    .setDescription("[PREMIUM] Reset HWID for a specific user on a specific script")
-    .addUserOption(o => o.setName("user").setDescription("Target user").setRequired(true)),
-
+    .setName("blacklist")
+    .setDescription("Blacklist a user from your script")
+    .addUserOption(o => o.setName("user").setDescription("User to blacklist").setRequired(true))
+    .addStringOption(o => o.setName("reason").setDescription("Reason").setRequired(false)),
   new SlashCommandBuilder()
-    .setName("cooldownhwid")
-    .setDescription("[PREMIUM] Set custom HWID reset cooldown for a script")
-    .addStringOption(o =>
-      o.setName("cooldown")
-        .setDescription("Cooldown duration (e.g. 30m, 1h, 6h, 1d, 3d)")
-        .setRequired(true)
-    ),
-
+    .setName("setwhitelistchannel")
+    .setDescription("Choose the channel used for whitelist activity")
+    .addChannelOption(o => o.setName("channel").setDescription("Channel to use").setRequired(true)),
   new SlashCommandBuilder()
-    .setName("premiuminfo")
-    .setDescription("View premium info, price, and how to buy"),
-
+    .setName("changeprofilepic")
+    .setDescription("Change the bot profile picture (Premium only)")
+    .addAttachmentOption(o => o.setName("image").setDescription("New bot profile picture").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("changename")
+    .setDescription("Change the bot name (Premium only)")
+    .addStringOption(o => o.setName("name").setDescription("New bot name").setMinLength(2).setMaxLength(32).setRequired(true)),
   new SlashCommandBuilder()
     .setName("premiumwhitelist")
-    .setDescription("[OWNER ONLY] Grant or revoke Premium access for a user")
-    .addSubcommand(sub =>
-      sub.setName("add")
-        .setDescription("Grant Premium access to a user")
-        .addUserOption(o => o.setName("user").setDescription("User to grant Premium").setRequired(true))
-        .addStringOption(o => o.setName("duration")
-          .setDescription("Duration (e.g. 7d, 30d, 1y, lifetime)")
-          .setRequired(true))
-    )
-    .addSubcommand(sub =>
-      sub.setName("remove")
-        .setDescription("Revoke Premium access from a user")
-        .addUserOption(o => o.setName("user").setDescription("User to revoke Premium").setRequired(true))
-    )
-    .addSubcommand(sub =>
-      sub.setName("list")
-        .setDescription("List all Premium users")
-    )
-    .addSubcommand(sub =>
-      sub.setName("check")
-        .setDescription("Check Premium status of a user")
-        .addUserOption(o => o.setName("user").setDescription("User to check").setRequired(true))
-    ),
-
-  new SlashCommandBuilder()
-    .setName("clearcache")
-    .setDescription("Clear script cache (admin only)")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
-    .setName("checkconnection")
-    .setDescription("Check connection between bot and web dashboard (admin only)")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
-    .setName("setwebhook")
-    .setDescription("Set a webhook URL to receive notifications when a script is executed")
-    .addStringOption(o =>
-      o.setName("url")
-        .setDescription("Discord Webhook URL")
-        .setRequired(true)
-    ),
+    .setDescription("[OWNER ONLY] Grant or revoke Premium access")
+    .addSubcommand(sub => sub.setName("add").setDescription("Grant Premium access to a user").addUserOption(o => o.setName("user").setDescription("User to grant Premium").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("Duration (e.g. 7d, 30d, 1y, lifetime)").setRequired(true)))
+    .addSubcommand(sub => sub.setName("remove").setDescription("Revoke Premium access from a user").addUserOption(o => o.setName("user").setDescription("User to revoke Premium").setRequired(true)))
+    .addSubcommand(sub => sub.setName("list").setDescription("List all Premium users"))
+    .addSubcommand(sub => sub.setName("check").setDescription("Check Premium status").addUserOption(o => o.setName("user").setDescription("User to check").setRequired(true))),
 ].map(c => c.toJSON());
 
-commands.push(...extras.commands);
 
 // ==================== ATTACH HANDLERS TO A CLIENT ====================
 function attachClientHandlers(client, botConfig) {
@@ -1955,6 +1847,38 @@ async function handleInteraction(interaction) {
         } catch (err) {
           console.error("❌ premiumwhitelist error:", err);
           return interaction.editReply({ content: "❌ Failed to process command." }).catch(() => {});
+        }
+      }
+
+      if (commandName === "setwhitelistchannel") {
+        if (!hasPermission(interaction.member, interaction.guildId)) return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
+        const channel = interaction.options.getChannel("channel");
+        if (!channel || !channel.isTextBased()) return interaction.reply({ content: "❌ Choose a text-based channel.", ephemeral: true }).catch(() => {});
+        const cfg = readConfig();
+        if (!cfg[interaction.guildId]) cfg[interaction.guildId] = {};
+        cfg[interaction.guildId].whitelistChannelId = String(channel.id);
+        writeConfig(cfg);
+        return interaction.reply({ content: `✅ Whitelist channel set to <#${channel.id}>.`, ephemeral: true }).catch(() => {});
+      }
+
+      if (commandName === "changeprofilepic" || commandName === "changename") {
+        if (!hasPermission(interaction.member, interaction.guildId)) return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
+        const premium = await checkPremium(interaction.user.id);
+        if (!premium) return interaction.reply(premiumRequiredReply(commandName, "Changing the bot profile picture or name is a Premium feature.")).catch(() => {});
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        try {
+          if (commandName === "changeprofilepic") {
+            const image = interaction.options.getAttachment("image");
+            if (!image || !/^image\/(png|jpe?g|gif|webp)$/i.test(image.contentType || "")) return interaction.editReply({ content: "❌ Upload a PNG, JPG, GIF, or WEBP image." }).catch(() => {});
+            await interaction.client.user.setAvatar(image.url);
+            return interaction.editReply({ content: "✅ THE LAB bot profile picture updated." }).catch(() => {});
+          }
+          const name = interaction.options.getString("name", true).trim();
+          await interaction.client.user.setUsername(name);
+          return interaction.editReply({ content: `✅ THE LAB bot name changed to **${name}**.` }).catch(() => {});
+        } catch (err) {
+          console.error(`${commandName} failed:`, err);
+          return interaction.editReply({ content: "❌ Discord rejected the change or rate-limited the bot. Try again later." }).catch(() => {});
         }
       }
 
