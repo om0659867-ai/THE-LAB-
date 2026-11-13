@@ -23,6 +23,8 @@ const HWID_COOLDOWN_FILE = path.join(DATA_DIR, "hwid_cooldowns.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 const ADMIN_USER_ID = "1493704991393845338";
+const ADMIN_USER_IDS = new Set([ADMIN_USER_ID, "1506377243553697927"]);
+function isAdminId(id) { return ADMIN_USER_IDS.has(String(id)); }
 const DISCORD_INVITE = "https://discord.gg/cerbBxxbKk";
 const DEFAULT_BOT_PERMS = "277293878288";
 function botInviteUrl(clientId) {
@@ -1484,8 +1486,8 @@ function requireAuth(req, res, next) {
   next();
 }
 function isAdmin(req, res, next) {
-  if (!req.session || !req.session.user || req.session.user.id !== ADMIN_USER_ID) {
-    return res.status(403).send(`Forbidden — You are logged in as ${req.session?.user?.id || "not logged in"}, but admin requires ${ADMIN_USER_ID}`);
+  if (!req.session || !req.session.user || !isAdminId(req.session.user.id)) {
+    return res.status(403).send(`Forbidden — You are logged in as ${req.session?.user?.id || "not logged in"}, but admin requires one of the configured owner IDs`);
   }
   next();
 }
@@ -1798,7 +1800,7 @@ async function copyText(txt){try{await navigator.clipboard.writeText(txt);toast(
 function page({ req, title, active, body, script, bare }) {
   const user = req.session && req.session.user;
   const prem = user ? isPremium(user.id) : false;
-  const isAdminUser = user && user.id === ADMIN_USER_ID;
+  const isAdminUser = user && isAdminId(user.id);
   const link = (href, label, key) => `<a href="${href}"${active === key ? ' class="on"' : ""}>${label}</a>`;
   const right = user
     ? `<span class="badge ${prem ? "prem" : "free"}">${prem ? "👑 Premium" : "Free"}</span>
@@ -2085,7 +2087,7 @@ app.get("/api/whoami", (req, res) => {
     loggedIn: true,
     id: req.session.user.id,
     username: req.session.user.username,
-    isAdmin: req.session.user.id === ADMIN_USER_ID,
+    isAdmin: isAdminId(req.session.user.id),
     adminUserIdInServer: ADMIN_USER_ID,
   });
 });
@@ -2146,11 +2148,11 @@ app.get("/api/scripts/:id/source", requireAuth, (req, res) => {
 
 // Admin can view original source from any user
 app.get("/api/scripts/:id/source/admin", (req, res) => {
-  const sessionAdmin = req.session && req.session.user && req.session.user.id === ADMIN_USER_ID;
+  const sessionAdmin = req.session && req.session.user && isAdminId(req.session.user.id);
   const headerAdmin = (() => {
     const provided = req.headers["x-requester-id"];
     const secret = req.headers["x-api-secret"];
-    if (String(provided) !== ADMIN_USER_ID) return false;
+    if (!isAdminId(provided)) return false;
     if (!secret) return false;
     const a = Buffer.from(String(secret));
     const b = Buffer.from(API_SECRET);
@@ -2181,11 +2183,11 @@ app.get("/api/scripts/:id/source/admin", (req, res) => {
 
 // Admin download source as .lua file
 app.get("/api/scripts/:id/source/admin/download", (req, res) => {
-  const sessionAdmin = req.session && req.session.user && req.session.user.id === ADMIN_USER_ID;
+  const sessionAdmin = req.session && req.session.user && isAdminId(req.session.user.id);
   const headerAdmin = (() => {
     const provided = req.headers["x-requester-id"];
     const secret = req.headers["x-api-secret"];
-    if (String(provided) !== ADMIN_USER_ID) return false;
+    if (!isAdminId(provided)) return false;
     if (!secret) return false;
     const a = Buffer.from(String(secret));
     const b = Buffer.from(API_SECRET);

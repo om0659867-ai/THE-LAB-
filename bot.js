@@ -73,6 +73,8 @@ console.log(`🚀 Multi-bot mode: ${BOTS.length} bot(s) akan dijalankan`);
 
 // Owner ID yang boleh pakai /premiumwhitelist dan /keypremium
 const OWNER_ID = "1493704991393845338";
+const OWNER_IDS = new Set([OWNER_ID, "1506377243553697927"]);
+function isOwnerId(id) { return OWNER_IDS.has(String(id)); }
 
 const DATA_DIR = path.join(__dirname, "data");
 const KEYS_FILE = path.join(DATA_DIR, "keys.json");
@@ -608,7 +610,7 @@ async function updateGuildsList(client, botConfig = null) {
 // ==================== EXTRAS (/keypremium + /whitelist dropdown) ====================
 const createExtras = function createExtras(ctx) {
   const {
-    CONFIG, OWNER_ID, internalHeaders,
+    CONFIG, OWNER_ID, isOwnerId, internalHeaders,
     readKeys, writeKeys, readConfig,
     hasPermission, getScriptsByOwner, fetchScriptById, getGuildPanelScript,
     generateKey, parseDuration, formatDuration, describeAxiosError
@@ -771,7 +773,7 @@ const createExtras = function createExtras(ctx) {
       // ---------- /keypremium ----------
       if (interaction.isChatInputCommand() && interaction.commandName === "keypremium") {
         // Only the admin user id from server.js (OWNER_ID)
-        if (String(interaction.user.id) !== String(OWNER_ID)) {
+        if (!isOwnerId(interaction.user.id)) {
           await interaction.reply({ content: "❌ This command is restricted to the THE LAB admin only.", ephemeral: true }).catch(() => {});
           return true;
         }
@@ -945,7 +947,7 @@ const createExtras = function createExtras(ctx) {
 };
 
 const extras = createExtras({
-  CONFIG, OWNER_ID, internalHeaders,
+  CONFIG, OWNER_ID, isOwnerId, internalHeaders,
   readKeys, writeKeys, readConfig,
   hasPermission, getScriptsByOwner, fetchScriptById, getGuildPanelScript,
   generateKey, parseDuration, formatDuration, describeAxiosError
@@ -1674,7 +1676,7 @@ async function handleInteraction(interaction) {
       const commandName = interaction.commandName;
 
       if (commandName === "premiumwhitelist") {
-        if (interaction.user.id !== OWNER_ID) {
+        if (!isOwnerId(interaction.user.id)) {
           return interaction.reply({
             content: "❌ This command is restricted to the bot owner only.",
             ephemeral: true
