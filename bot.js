@@ -22,8 +22,7 @@ const path = require("path");
 const axios = require("axios");
 
 // ==================== MULTI-BOT CONFIG ====================
-// Bot 1: BOT_TOKEN atau BOT_TOKEN_1 + DISCORD_CLIENT_ID / DISCORD_CLIENT_ID_1
-// Bot 2: BOT_TOKEN_2 + DISCORD_CLIENT_ID_2 (opsional, fallback ke DISCORD_CLIENT_ID)
+// Primary bot: BOT_TOKEN or BOT_TOKEN_1 + DISCORD_CLIENT_ID / DISCORD_CLIENT_ID_1
 const BOTS = [];
 
 if (process.env.BOT_TOKEN || process.env.BOT_TOKEN_1) {
@@ -32,14 +31,6 @@ if (process.env.BOT_TOKEN || process.env.BOT_TOKEN_1) {
     name: "Bot-1",
     token: process.env.BOT_TOKEN || process.env.BOT_TOKEN_1,
     clientId: process.env.DISCORD_CLIENT_ID_1 || process.env.DISCORD_CLIENT_ID || "1545625902585487370"
-  });
-}
-if (process.env.BOT_TOKEN_2) {
-  BOTS.push({
-    id: "2",
-    name: "Bot-2",
-    token: process.env.BOT_TOKEN_2,
-    clientId: process.env.DISCORD_CLIENT_ID_2 || process.env.DISCORD_CLIENT_ID || "1555752792113811506"
   });
 }
 if (process.env.BOT_TOKEN_3) {
@@ -60,7 +51,7 @@ if (process.env.BOT_TOKEN_4) {
 }
 
 if (BOTS.length === 0) {
-  console.error("❌ FATAL: Set at least BOT_TOKEN / BOT_TOKEN_1 (optional: BOT_TOKEN_2/3/4)!");
+  console.error("❌ FATAL: Set BOT_TOKEN or BOT_TOKEN_1 (optional: BOT_TOKEN_3/4)!");
   process.exit(1);
 }
 

@@ -31,21 +31,16 @@ function botInviteUrl(clientId) {
 }
 
 const BOT_1_CLIENT_ID = process.env.DISCORD_CLIENT_ID_1 || process.env.DISCORD_CLIENT_ID || "1545625902585487370";
-const BOT_2_CLIENT_ID = process.env.DISCORD_CLIENT_ID_2 || "1555752792113811506";
 const BOT_3_CLIENT_ID = process.env.DISCORD_CLIENT_ID_3 || "";
 const BOT_4_CLIENT_ID = process.env.DISCORD_CLIENT_ID_4 || "";
 
 const BOT_INVITE = process.env.BOT_INVITE_1 || botInviteUrl(BOT_1_CLIENT_ID);
-const BOT_INVITE_2 = process.env.BOT_INVITE_2 || botInviteUrl(BOT_2_CLIENT_ID);
 const BOT_INVITE_3 = process.env.BOT_INVITE_3 || botInviteUrl(BOT_3_CLIENT_ID);
 const BOT_INVITE_4 = process.env.BOT_INVITE_4 || botInviteUrl(BOT_4_CLIENT_ID);
 
 const BOT_1_NAME = process.env.BOT_1_NAME || "THE LAB";
 const BOT_1_TAG = process.env.BOT_1_TAG || "THE LAB#0001";
 const BOT_1_AVATAR = process.env.BOT_1_AVATAR || "https://cdn.discordapp.com/embed/avatars/0.png";
-const BOT_2_NAME = process.env.BOT_2_NAME || "THE LAB Alt";
-const BOT_2_TAG = process.env.BOT_2_TAG || "THE LAB#0002";
-const BOT_2_AVATAR = process.env.BOT_2_AVATAR || "https://cdn.discordapp.com/embed/avatars/1.png";
 const BOT_3_NAME = process.env.BOT_3_NAME || "THE LAB Bot 3";
 const BOT_3_TAG = process.env.BOT_3_TAG || "THE LAB#0003";
 const BOT_3_AVATAR = process.env.BOT_3_AVATAR || "https://cdn.discordapp.com/embed/avatars/2.png";
@@ -59,7 +54,6 @@ const BOT_STATS_FILE = path.join(DATA_DIR, "bot_stats.json");
 function getBotCatalog() {
   return [
     { id: "1", name: BOT_1_NAME, tag: BOT_1_TAG, avatar: BOT_1_AVATAR, invite: BOT_INVITE, clientId: BOT_1_CLIENT_ID, full: true },
-    { id: "2", name: BOT_2_NAME, tag: BOT_2_TAG, avatar: BOT_2_AVATAR, invite: BOT_INVITE_2, clientId: BOT_2_CLIENT_ID, full: true },
     { id: "3", name: BOT_3_NAME, tag: BOT_3_TAG, avatar: BOT_3_AVATAR, invite: BOT_INVITE_3, clientId: BOT_3_CLIENT_ID, full: !!BOT_3_CLIENT_ID },
     { id: "4", name: BOT_4_NAME, tag: BOT_4_TAG, avatar: BOT_4_AVATAR, invite: BOT_INVITE_4, clientId: BOT_4_CLIENT_ID, full: !!BOT_4_CLIENT_ID },
   ];
@@ -408,7 +402,7 @@ async function upsertDiscordUser(discordUser) {
     id: String(discordUser.id),
     username: discordUser.username,
     avatar,
-    selectedBot: selectedBot && ["1","2","3","4"].includes(String(selectedBot)) ? String(selectedBot) : null,
+    selectedBot: selectedBot && ["1","3","4"].includes(String(selectedBot)) ? String(selectedBot) : null,
   };
 }
 
@@ -1985,7 +1979,6 @@ app.get("/select-bot", (req, res) => {
     console.error("getBotCatalog failed:", e);
     catalog = [
       { id: "1", name: "THE LAB", tag: "THE LAB#0001", avatar: "https://cdn.discordapp.com/embed/avatars/0.png", invite: BOT_INVITE, clientId: BOT_1_CLIENT_ID, full: true },
-      { id: "2", name: "THE LAB Alt", tag: "THE LAB#0002", avatar: "https://cdn.discordapp.com/embed/avatars/1.png", invite: BOT_INVITE_2, clientId: BOT_2_CLIENT_ID, full: true },
       { id: "3", name: "THE LAB Bot 3", tag: "THE LAB#0003", avatar: "https://cdn.discordapp.com/embed/avatars/2.png", invite: BOT_INVITE_3, clientId: BOT_3_CLIENT_ID, full: !!BOT_3_CLIENT_ID },
       { id: "4", name: "THE LAB Bot 4", tag: "THE LAB#0004", avatar: "https://cdn.discordapp.com/embed/avatars/3.png", invite: BOT_INVITE_4, clientId: BOT_4_CLIENT_ID, full: !!BOT_4_CLIENT_ID },
     ];
