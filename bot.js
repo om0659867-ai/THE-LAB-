@@ -788,6 +788,18 @@ const createExtras = function createExtras(ctx) {
     return formatWhitelistMessage(`<@&${targetId}>`) + note;
   }
 
+
+  async function postWhitelistMessage(interaction, msg) {
+    if (typeof msg !== "string" || msg.startsWith("❌")) return false;
+    let channel = interaction.channel;
+    const configuredId = readConfig()[interaction.guildId]?.whitelistChannelId;
+    if (configuredId) {
+      try { channel = await interaction.guild.channels.fetch(String(configuredId)); } catch { channel = null; }
+    }
+    if (!channel || !channel.isTextBased()) return false;
+    try { await channel.send({ content: msg }); return true; } catch { return false; }
+  }
+
   // ==================== HANDLER ====================
   async function handle(interaction) {
     try {
@@ -895,11 +907,12 @@ const createExtras = function createExtras(ctx) {
 
         if (candidates.length === 1) {
           const msg = await doWhitelist(interaction, { targetType, targetId, days, scriptId: candidates[0].id });
-          // Post public whitelist message in the command channel; keep ephemeral reply as ack
           const isError = typeof msg === "string" && msg.startsWith("❌");
           if (!isError) {
-            try { await interaction.channel.send({ content: msg }); } catch {}
-            await interaction.editReply({ content: "✅ Whitelist done. Message posted in this channel." }).catch(() => {});
+            const posted = await postWhitelistMessage(interaction, msg);
+            await interaction.editReply({
+              content: posted ? "✅ Whitelist done. Message posted in the configured whitelist channel." : msg
+            }).catch(() => {});
           } else {
             await interaction.editReply({ content: msg }).catch(() => {});
           }
@@ -943,8 +956,11 @@ const createExtras = function createExtras(ctx) {
         const msg = await doWhitelist(interaction, { targetType, targetId, days, scriptId });
         const isError = typeof msg === "string" && msg.startsWith("❌");
         if (!isError) {
-          try { await interaction.channel.send({ content: msg }); } catch {}
-          await interaction.editReply({ content: "✅ Whitelist done. Message posted in this channel.", components: [] }).catch(() => {});
+          const posted = await postWhitelistMessage(interaction, msg);
+          await interaction.editReply({
+            content: posted ? "✅ Whitelist done. Message posted in the configured whitelist channel." : msg,
+            components: []
+          }).catch(() => {});
         } else {
           await interaction.editReply({ content: msg, components: [] }).catch(() => {});
         }
