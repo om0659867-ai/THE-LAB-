@@ -588,6 +588,7 @@ const freeModeTempData = new Map();
 const webhookTempData = new Map();
 const cooldownTempData = new Map();
 const resetHwidUserTempData = new Map();
+const compensateTempData = new Map();
 
 // ==================== CLIENTS (multi-bot) ====================
 const clients = []; // semua Client yang aktif
@@ -1000,6 +1001,11 @@ const commands = [
     .addUserOption(o => o.setName("user").setDescription("User to whitelist").setRequired(false))
     .addRoleOption(o => o.setName("role").setDescription("Role to whitelist").setRequired(false)),
   new SlashCommandBuilder()
+    .setName("compensate")
+    .setDescription("Adjust an existing user's key for one of your scripts")
+    .addUserOption(o => o.setName("user").setDescription("User to compensate").setRequired(true))
+    .addIntegerOption(o => o.setName("days").setDescription("Days to add (0 = lifetime)").setMinValue(0).setMaxValue(3650).setRequired(true)),
+  new SlashCommandBuilder()
     .setName("premiumwhitelist")
     .setDescription("[OWNER ONLY] Grant or revoke Premium access")
     .addSubcommand(sub => sub.setName("add").setDescription("Grant Premium access to a user").addUserOption(o => o.setName("user").setDescription("User to grant Premium").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("Duration (e.g. 7d, 30d, 1y, lifetime)").setRequired(true)))
@@ -1020,14 +1026,14 @@ function attachClientHandlers(client, botConfig) {
     console.log(`🧩 Command count: ${commands.length}`);
 
     try {
-      // Global commands are kept for servers added later. They can take time to appear.
-      await rest.put(Routes.applicationCommands(applicationId), { body: commands });
-      console.log(`✅ [${botConfig.name}] Global slash commands registered.`);
+      // Remove global copies so Discord does not show every command twice.
+      await rest.put(Routes.applicationCommands(applicationId), { body: [] });
+      console.log(`✅ [${botConfig.name}] Cleared global command copies.`);
     } catch (err) {
-      console.error(`❌ [${botConfig.name}] Global command registration failed:`, err.rawError || err);
+      console.error(`❌ [${botConfig.name}] Could not clear global commands:`, err.rawError || err);
     }
 
-    // Guild commands appear immediately and also replace stale commands in each server.
+    // Guild commands appear immediately and are the only registered copies.
     for (const guild of client.guilds.cache.values()) {
       try {
         await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: commands });
@@ -1047,6 +1053,14 @@ function attachClientHandlers(client, botConfig) {
 
   client.on("guildCreate", async (guild) => {
     console.log(`✅ [${botConfig.name}] Joined guild: ${guild.name} (${guild.id})`);
+    try {
+      const rest = new REST({ version: "10" }).setToken(botConfig.token);
+      const applicationId = client.application?.id || botConfig.clientId;
+      await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: commands });
+      console.log(`✅ [${botConfig.name}] Registered ${commands.length} commands in new guild ${guild.name}.`);
+    } catch (err) {
+      console.error(`❌ [${botConfig.name}] New-guild command registration failed:`, err.rawError || err);
+    }
     await updateGuildsList(client, botConfig);
   });
 
@@ -1228,6 +1242,17 @@ async function handleInteraction(interaction) {
           const scriptId = customId.includes(":") ? customId.split(":")[1] : null;
           if (!scriptId) {
             return interaction.editReply({ content: "❌ Invalid script reference." }).catch(() => {});
+          }
+
+          const whitelisted = readKeys().some(k =>
+            String(k.userId) === String(interaction.user.id) &&
+            String(k.scriptId) === String(scriptId) &&
+            !(k.expiry && new Date(k.expiry) < new Date())
+          );
+          if (!whitelisted) {
+            await interaction.editReply({ content: "✅ HWID reset!" }).catch(() => {});
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            return interaction.editReply({ content: "😂 Sike, I lied — you are not whitelisted for this script." }).catch(() => {});
           }
 
           const result = await axios.post(`${CONFIG.apiBase}/api/hwid/reset-self`,
@@ -1473,6 +1498,31 @@ async function handleInteraction(interaction) {
       }
 
       
+      if (interaction.isStringSelectMenu() && interaction.customId.startsWith("compensate_select:")) {
+        await interaction.deferUpdate().catch(() => {});
+        try {
+          if (!hasPermission(interaction.member, interaction.guildId)) return interaction.editReply({ content: "❌ No permission.", components: [] }).catch(() => {});
+          const parts = interaction.customId.split(":");
+          const targetUserId = parts[1];
+          const days = Number(parts[2]);
+          const scriptId = interaction.values[0];
+          const myScripts = await getScriptsByOwner(interaction.user.id);
+          const script = myScripts.find(x => String(x.id) === String(scriptId));
+          if (!script) return interaction.editReply({ content: "❌ Script not found or not yours.", components: [] }).catch(() => {});
+          const keys = readKeys();
+          const key = keys.find(k => String(k.userId) === String(targetUserId) && String(k.scriptId) === String(scriptId));
+          if (!key) return interaction.editReply({ content: `❌ <@${targetUserId}> is not whitelisted for **${script.name}**.`, components: [] }).catch(() => {});
+          key.expiry = days === 0 ? null : new Date(Date.now() + days * 86400000).toISOString();
+          key.compensatedAt = new Date().toISOString();
+          key.compensatedBy = interaction.user.id;
+          await writeKeys(keys);
+          return interaction.editReply({ content: `✅ Key for <@${targetUserId}> on **${script.name}** adjusted to ${days === 0 ? "lifetime" : `${days} day(s)`}.`, components: [] }).catch(() => {});
+        } catch (err) {
+          console.error(`❌ compensate_select failed: ${describeAxiosError(err)}`);
+          return interaction.editReply({ content: "❌ Failed to compensate this key.", components: [] }).catch(() => {});
+        }
+      }
+
       if (interaction.isStringSelectMenu() && interaction.customId.startsWith("blacklist_pick:")) {
         await interaction.deferUpdate().catch(() => {});
         try {
@@ -1880,6 +1930,35 @@ async function handleInteraction(interaction) {
         } catch (err) {
           console.error("❌ premiumwhitelist error:", err);
           return interaction.editReply({ content: "❌ Failed to process command." }).catch(() => {});
+        }
+      }
+
+      if (commandName === "compensate") {
+        if (!hasPermission(interaction.member, interaction.guildId)) return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        try {
+          const targetUser = interaction.options.getUser("user", true);
+          const days = interaction.options.getInteger("days", true);
+          const myScripts = await getScriptsByOwner(interaction.user.id);
+          if (myScripts.length === 0) return interaction.editReply({ content: "❌ You don't have any scripts yet." }).catch(() => {});
+          if (myScripts.length === 1) {
+            const script = myScripts[0];
+            const keys = readKeys();
+            const key = keys.find(k => String(k.userId) === String(targetUser.id) && String(k.scriptId) === String(script.id));
+            if (!key) return interaction.editReply({ content: `❌ <@${targetUser.id}> is not whitelisted for **${script.name}**.` }).catch(() => {});
+            key.expiry = days === 0 ? null : new Date(Date.now() + days * 86400000).toISOString();
+            key.compensatedAt = new Date().toISOString();
+            key.compensatedBy = interaction.user.id;
+            await writeKeys(keys);
+            return interaction.editReply({ content: `✅ Key for <@${targetUser.id}> on **${script.name}** adjusted to ${days === 0 ? "lifetime" : `${days} day(s)`}.` }).catch(() => {});
+          }
+          const select = new StringSelectMenuBuilder()
+            .setCustomId(`compensate_select:${targetUser.id}:${days}:${interaction.user.id}`)
+            .setPlaceholder("Select the script...").addOptions(scriptSelectOptions(myScripts));
+          return interaction.editReply({ content: `Select the script to compensate for <@${targetUser.id}>:`, components: [new ActionRowBuilder().addComponents(select)] }).catch(() => {});
+        } catch (err) {
+          console.error(`❌ compensate failed: ${describeAxiosError(err)}`);
+          return interaction.editReply({ content: "❌ Failed to compensate this key." }).catch(() => {});
         }
       }
 
