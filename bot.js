@@ -994,6 +994,12 @@ const commands = [
     .setDescription("Change the bot name (Premium only)")
     .addStringOption(o => o.setName("name").setDescription("New bot name").setMinLength(2).setMaxLength(32).setRequired(true)),
   new SlashCommandBuilder()
+    .setName("whitelist")
+    .setDescription("Whitelist a user or role for one of your scripts")
+    .addIntegerOption(o => o.setName("days").setDescription("Duration in days (0=lifetime)").setRequired(true))
+    .addUserOption(o => o.setName("user").setDescription("User to whitelist").setRequired(false))
+    .addRoleOption(o => o.setName("role").setDescription("Role to whitelist").setRequired(false)),
+  new SlashCommandBuilder()
     .setName("premiumwhitelist")
     .setDescription("[OWNER ONLY] Grant or revoke Premium access")
     .addSubcommand(sub => sub.setName("add").setDescription("Grant Premium access to a user").addUserOption(o => o.setName("user").setDescription("User to grant Premium").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("Duration (e.g. 7d, 30d, 1y, lifetime)").setRequired(true)))
@@ -1008,6 +1014,7 @@ function attachClientHandlers(client, botConfig) {
   client.once("ready", async () => {
     const rest = new REST({ version: "10" }).setToken(botConfig.token);
     const applicationId = client.application?.id || botConfig.clientId;
+    botConfig.clientId = applicationId;
     console.log(`👑 [${botConfig.name}] Logged in as ${client.user.tag}`);
     console.log(`🆔 Logged-in application ID: ${applicationId}`);
     console.log(`🧩 Command count: ${commands.length}`);
@@ -2725,8 +2732,12 @@ process.on("unhandledRejection", (error) => {
 // ==================== START ALL BOTS ====================
 async function startAllBots() {
   console.log(`🚀 Starting ${BOTS.length} bot(s)...`);
-  console.log(`📦 Loading shared data from server (PostgreSQL)...`);
-  await initStoreFromServer();
+  console.log(`📦 Loading shared data from server (PostgreSQL) in the background...`);
+  // Do not block Discord login on API/database hydration. The bot can still register
+  // itself and receive commands while the shared store is being loaded.
+  const storeLoad = initStoreFromServer().catch((err) => {
+    console.error("❌ Initial store load failed:", err.message || err);
+  });
   // Soft refresh cache periodically (does not wipe — only replaces after successful pull)
   setInterval(async () => {
     if (!storeHydrated) {
