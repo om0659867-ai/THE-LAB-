@@ -581,6 +581,18 @@ async function checkPanelLimit(ownerId, guildId = null, scriptId = null) {
   }
 }
 
+
+async function postConfiguredGuildMessage(interaction, content) {
+  if (!interaction.guild || typeof content !== "string" || content.startsWith("❌")) return false;
+  let channel = interaction.channel;
+  const configuredId = readConfig()[interaction.guildId]?.whitelistChannelId;
+  if (configuredId) {
+    try { channel = await interaction.guild.channels.fetch(String(configuredId)); } catch { channel = null; }
+  }
+  if (!channel || !channel.isTextBased()) return false;
+  try { await channel.send({ content }); return true; } catch { return false; }
+}
+
 // ==================== TEMP DATA ====================
 const panelTempData = new Map();
 const buyerRoleTempData = new Map();
@@ -1568,8 +1580,10 @@ async function handleInteraction(interaction) {
           writeKeys(readKeys().filter(k =>
             !(String(k.userId) === String(targetUserId) && String(k.scriptId) === String(scriptId))
           ));
+          const notice = `🚫 **<@${targetUserId}>** has been blacklisted from **${script.name}**.\nAccess to this script only has been revoked.`;
+          const posted = await postConfiguredGuildMessage(interaction, notice);
           return interaction.editReply({
-            content: `🚫 **<@${targetUserId}>** has been blacklisted from **${script.name}**.\nAccess to this script only has been revoked.`,
+            content: posted ? "✅ Blacklist complete. The notice was sent to the configured whitelist channel." : notice,
             components: []
           }).catch(() => {});
         } catch (err) {
@@ -2456,7 +2470,10 @@ async function handleInteraction(interaction) {
 
           if (myScripts.length === 1) {
             const msg = await applyBlacklist(myScripts[0].id, myScripts[0].name);
-            return interaction.editReply({ content: msg }).catch(() => {});
+            const posted = await postConfiguredGuildMessage(interaction, msg);
+            return interaction.editReply({
+              content: posted ? "✅ Blacklist complete. The notice was sent to the configured whitelist channel." : msg
+            }).catch(() => {});
           }
 
           // Private dropdown to pick which script

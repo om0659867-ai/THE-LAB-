@@ -10,7 +10,7 @@ const axios = require("axios");
 // Dipanggil dari bot.js: require("./kingmor-extras")({ ...helpers })
 module.exports = function createExtras(ctx) {
   const {
-    CONFIG, OWNER_ID, internalHeaders,
+    CONFIG, OWNER_ID, isOwnerId, internalHeaders,
     readKeys, writeKeys, readConfig,
     hasPermission, getScriptsByOwner, fetchScriptById, getGuildPanelScript,
     generateKey, parseDuration, formatDuration, describeAxiosError
@@ -136,13 +136,34 @@ module.exports = function createExtras(ctx) {
     return `✅ <@&${targetId}> has been whitelisted for **${scriptInfo.name}** (${durationText}).\n${added} member(s) added${note}.`;
   }
 
+
+  async function postWhitelistMessage(interaction, msg) {
+    if (typeof msg !== "string" || msg.startsWith("❌")) return false;
+    let channel = interaction.channel;
+    const configuredId = readConfig()[interaction.guildId]?.whitelistChannelId;
+    if (configuredId) {
+      try {
+        channel = await interaction.guild.channels.fetch(String(configuredId));
+      } catch {
+        channel = null;
+      }
+    }
+    if (!channel || !channel.isTextBased()) return false;
+    try {
+      await channel.send({ content: msg });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // ==================== HANDLER ====================
   // Return true kalau interaksi sudah ditangani di sini.
   async function handle(interaction) {
     try {
       // ---------- /keypremium ----------
       if (interaction.isChatInputCommand() && interaction.commandName === "keypremium") {
-        if (interaction.user.id !== OWNER_ID) {
+        if (!isOwnerId(interaction.user.id)) {
           await interaction.reply({ content: "❌ This command is restricted to the bot owner only.", ephemeral: true }).catch(() => {});
           return true;
         }
@@ -227,7 +248,10 @@ module.exports = function createExtras(ctx) {
 
         if (candidates.length === 1) {
           const msg = await doWhitelist(interaction, { targetType, targetId, days, scriptId: candidates[0].id });
-          await interaction.editReply({ content: msg }).catch(() => {});
+          const posted = await postWhitelistMessage(interaction, msg);
+          await interaction.editReply({
+            content: posted ? "✅ Whitelist complete. The confirmation was sent to the configured whitelist channel." : msg
+          }).catch(() => {});
           return true;
         }
 
@@ -257,7 +281,11 @@ module.exports = function createExtras(ctx) {
         const scriptId = interaction.values[0];
 
         const msg = await doWhitelist(interaction, { targetType, targetId, days, scriptId });
-        await interaction.editReply({ content: msg, components: [] }).catch(() => {});
+        const posted = await postWhitelistMessage(interaction, msg);
+        await interaction.editReply({
+          content: posted ? "✅ Whitelist complete. The confirmation was sent to the configured whitelist channel." : msg,
+          components: []
+        }).catch(() => {});
         return true;
       }
     } catch (err) {
