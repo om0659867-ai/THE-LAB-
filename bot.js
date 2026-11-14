@@ -33,6 +33,14 @@ if (process.env.BOT_TOKEN || process.env.BOT_TOKEN_1) {
     clientId: process.env.DISCORD_CLIENT_ID_1 || process.env.DISCORD_CLIENT_ID || "1545625902585487370"
   });
 }
+if (process.env.BOT_TOKEN_2) {
+  BOTS.push({
+    id: "2",
+    name: "Bot-2",
+    token: process.env.BOT_TOKEN_2,
+    clientId: process.env.DISCORD_CLIENT_ID_2 || ""
+  });
+}
 if (process.env.BOT_TOKEN_3) {
   BOTS.push({
     id: "3",
@@ -51,7 +59,7 @@ if (process.env.BOT_TOKEN_4) {
 }
 
 if (BOTS.length === 0) {
-  console.error("❌ FATAL: Set BOT_TOKEN or BOT_TOKEN_1 (optional: BOT_TOKEN_3/4)!");
+  console.error("❌ FATAL: Set BOT_TOKEN or BOT_TOKEN_1 (optional: BOT_TOKEN_2/3/4)!");
   process.exit(1);
 }
 
@@ -999,19 +1007,35 @@ const commands = [
 function attachClientHandlers(client, botConfig) {
   client.once("ready", async () => {
     const rest = new REST({ version: "10" }).setToken(botConfig.token);
+    const applicationId = client.application?.id || botConfig.clientId;
+    console.log(`👑 [${botConfig.name}] Logged in as ${client.user.tag}`);
+    console.log(`🆔 Logged-in application ID: ${applicationId}`);
+    console.log(`🧩 Command count: ${commands.length}`);
+
     try {
-      await rest.put(Routes.applicationCommands(botConfig.clientId), { body: commands });
-      console.log(`👑 [${botConfig.name}] Bot ready: ${client.user.tag}`);
-      console.log(`🔗 API_BASE: ${CONFIG.apiBase}`);
-      console.log(`💎 Premium: ${PREMIUM_INFO.priceIDR} / ${PREMIUM_INFO.priceUSD}`);
-      console.log(`📢 Discord: ${PREMIUM_INFO.discord}`);
-      console.log(`🔐 Owner ID: ${OWNER_ID}`);
-      console.log(`🆔 Client ID: ${botConfig.clientId}`);
-      await updateGuildsList(client, botConfig);
-      setInterval(() => updateGuildsList(client, botConfig), 60 * 1000);
+      // Global commands are kept for servers added later. They can take time to appear.
+      await rest.put(Routes.applicationCommands(applicationId), { body: commands });
+      console.log(`✅ [${botConfig.name}] Global slash commands registered.`);
     } catch (err) {
-      console.error(`❌ [${botConfig.name}] Failed to register commands:`, err);
+      console.error(`❌ [${botConfig.name}] Global command registration failed:`, err.rawError || err);
     }
+
+    // Guild commands appear immediately and also replace stale commands in each server.
+    for (const guild of client.guilds.cache.values()) {
+      try {
+        await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: commands });
+        console.log(`✅ [${botConfig.name}] Registered ${commands.length} commands in ${guild.name} (${guild.id}).`);
+      } catch (err) {
+        console.error(`❌ [${botConfig.name}] Guild command registration failed for ${guild.name} (${guild.id}):`, err.rawError || err);
+      }
+    }
+
+    console.log(`🔗 API_BASE: ${CONFIG.apiBase}`);
+    console.log(`💎 Premium: ${PREMIUM_INFO.priceIDR} / ${PREMIUM_INFO.priceUSD}`);
+    console.log(`📢 Discord: ${PREMIUM_INFO.discord}`);
+    console.log(`🔐 Owner IDs: ${[...OWNER_IDS].join(", ")}`);
+    await updateGuildsList(client, botConfig);
+    setInterval(() => updateGuildsList(client, botConfig), 60 * 1000);
   });
 
   client.on("guildCreate", async (guild) => {
