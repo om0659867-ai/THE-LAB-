@@ -421,6 +421,13 @@ function hasPermission(member, guildId) {
   return member.roles.cache.has(roleId);
 }
 
+function canWhitelist(member, guildId) {
+  if (!member) return false;
+  if (member.permissions?.has(PermissionFlagsBits.Administrator)) return true;
+  const roleId = readConfig()[guildId]?.whitelistManagerRole;
+  return Boolean(roleId && member.roles?.cache?.has(String(roleId)));
+}
+
 /** Validate a role from slash options. Returns { ok, role, error }. */
 function validateRoleOption(interaction, role, { allowEveryone = false } = {}) {
   if (!role || !role.id) {
@@ -698,7 +705,7 @@ const createExtras = function createExtras(ctx) {
     if (!scriptInfo) return "❌ That script no longer exists.";
 
     const owns = String(scriptInfo.ownerId) === String(interaction.user.id);
-    if (!owns && !hasPermission(interaction.member, interaction.guildId)) {
+    if (!owns && !canWhitelist(interaction.member, interaction.guildId)) {
       return "❌ You can only whitelist for your own scripts.";
     }
 
@@ -854,8 +861,8 @@ const createExtras = function createExtras(ctx) {
 
       // ---------- /whitelist ----------
       if (interaction.isChatInputCommand() && interaction.commandName === "whitelist") {
-        if (!hasPermission(interaction.member, interaction.guildId)) {
-          await interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
+        if (!canWhitelist(interaction.member, interaction.guildId)) {
+          await interaction.reply({ content: "❌ You need the configured whitelist role or Administrator permission.", ephemeral: true }).catch(() => {});
           return true;
         }
         // Private (ephemeral) for selection UI
@@ -936,7 +943,7 @@ const createExtras = function createExtras(ctx) {
       if (interaction.isStringSelectMenu() && interaction.customId.startsWith("whitelist_pick:")) {
         await interaction.deferUpdate().catch(() => {});
 
-        if (!interaction.guild || !hasPermission(interaction.member, interaction.guildId)) {
+        if (!interaction.guild || !canWhitelist(interaction.member, interaction.guildId)) {
           await interaction.editReply({ content: "❌ No permission.", components: [] }).catch(() => {});
           return true;
         }
@@ -1018,6 +1025,10 @@ const commands = [
     .setName("setwhitelistchannel")
     .setDescription("Choose the channel used for whitelist activity")
     .addChannelOption(o => o.setName("channel").setDescription("Channel to use").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("setwhitelistrole")
+    .setDescription("Choose the role allowed to use /whitelist")
+    .addRoleOption(o => o.setName("role").setDescription("Role allowed to whitelist users").setRequired(true)),
   new SlashCommandBuilder()
     .setName("changeprofilepic")
     .setDescription("Change the bot profile picture (Premium only)")
@@ -2116,6 +2127,25 @@ async function handleInteraction(interaction) {
             content: `🔗 **Connection Check**\n\n• API_BASE: \`${CONFIG.apiBase}\`\n• Health check: ❌ FAILED — ${describeAxiosError(err)}`
           }).catch(() => {});
         }
+      }
+
+      if (commandName === "setwhitelistrole") {
+        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+          return interaction.reply({ content: "❌ Administrator permission required to set the whitelist role.", ephemeral: true }).catch(() => {});
+        }
+        const rawRole = interaction.options.getRole("role");
+        const checked = validateRoleOption(interaction, rawRole);
+        if (!checked.ok) {
+          return interaction.reply({ content: checked.error, ephemeral: true }).catch(() => {});
+        }
+        const cfg = readConfig();
+        if (!cfg[interaction.guildId]) cfg[interaction.guildId] = {};
+        cfg[interaction.guildId].whitelistManagerRole = String(checked.role.id);
+        await writeConfig(cfg);
+        return interaction.reply({
+          content: `✅ **${checked.role.name}** can now use /whitelist in this server.`,
+          ephemeral: true
+        }).catch(() => {});
       }
 
       if (commandName === "whitelistrole") {
