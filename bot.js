@@ -1985,15 +1985,18 @@ async function handleInteraction(interaction) {
         if (!premium) return interaction.reply(premiumRequiredReply(commandName, "Changing the bot profile picture or name is a Premium feature.")).catch(() => {});
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
+          if (!interaction.guild) {
+            return interaction.editReply({ content: "❌ This command can only be used inside a server." }).catch(() => {});
+          }
           if (commandName === "changeprofilepic") {
             const image = interaction.options.getAttachment("image");
             if (!image || !/^image\/(png|jpe?g|gif|webp)$/i.test(image.contentType || "")) return interaction.editReply({ content: "❌ Upload a PNG, JPG, GIF, or WEBP image." }).catch(() => {});
-            await interaction.client.user.setAvatar(image.url);
-            return interaction.editReply({ content: "✅ THE LAB bot profile picture updated." }).catch(() => {});
+            await interaction.guild.members.editMe({ avatar: image.url });
+            return interaction.editReply({ content: `✅ Bot profile picture updated for **${interaction.guild.name}** only.` }).catch(() => {});
           }
           const name = interaction.options.getString("name", true).trim();
-          await interaction.client.user.setUsername(name);
-          return interaction.editReply({ content: `✅ THE LAB bot name changed to **${name}**.` }).catch(() => {});
+          await interaction.guild.members.editMe({ nick: name });
+          return interaction.editReply({ content: `✅ Bot server name changed to **${name}** in **${interaction.guild.name}** only.` }).catch(() => {});
         } catch (err) {
           console.error(`${commandName} failed:`, err);
           return interaction.editReply({ content: "❌ Discord rejected the change or rate-limited the bot. Try again later." }).catch(() => {});
