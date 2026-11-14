@@ -969,6 +969,10 @@ const commands = [
     .addIntegerOption(o => o.setName("days").setDescription("Duration in days (0=lifetime)").setRequired(true))
     .addIntegerOption(o => o.setName("amount").setDescription("Number of keys (1-500)").setMinValue(1).setMaxValue(500).setRequired(true)),
   new SlashCommandBuilder()
+    .setName("setbuyerrole")
+    .setDescription("Set the buyer role for your script")
+    .addRoleOption(o => o.setName("role").setDescription("Role given to users with a key").setRequired(true)),
+  new SlashCommandBuilder()
     .setName("setuppanel")
     .setDescription("Set up a script panel")
     .addStringOption(o => o.setName("title").setDescription("Panel title").setRequired(true))
@@ -1177,14 +1181,16 @@ async function handleInteraction(interaction) {
           }
 
           const keys = readKeys();
-          const validKey = keys.find(k => String(k.userId) === String(interaction.user.id) && k.scriptId === scriptId);
+          const validKey = keys.find(k =>
+            String(k.userId) === String(interaction.user.id) &&
+            String(k.scriptId) === String(scriptId) &&
+            !(k.expiry && new Date(k.expiry) < new Date())
+          );
 
           if (!validKey) {
-            return interaction.editReply({ content: "❌ You don't have a key for this script!" }).catch(() => {});
-          }
-
-          if (validKey.expiry && new Date(validKey.expiry) < new Date()) {
-            return interaction.editReply({ content: "❌ Your key has expired!" }).catch(() => {});
+            await interaction.editReply({ content: "⏳ One second..." }).catch(() => {});
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            return interaction.editReply({ content: "😂 Got you — you’re not whitelisted for this script." }).catch(() => {});
           }
 
           const loaderCode = `script_key = "${validKey.key}"\nloadstring(game:HttpGet("${CONFIG.apiBase}/api/loader/${validKey.scriptId}.lua"))()`;
