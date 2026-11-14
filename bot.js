@@ -38,7 +38,7 @@ if (process.env.BOT_TOKEN_2) {
     id: "2",
     name: "Bot-2",
     token: process.env.BOT_TOKEN_2,
-    clientId: process.env.DISCORD_CLIENT_ID_2 || ""
+    clientId: process.env.DISCORD_CLIENT_ID_2 || "1570961960961572914"
   });
 }
 if (process.env.BOT_TOKEN_3) {
