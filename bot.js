@@ -1013,8 +1013,9 @@ const commands = [
     .addStringOption(o => o.setName("title").setDescription("Panel title").setRequired(true)),
   new SlashCommandBuilder()
     .setName("resethwid")
-    .setDescription("Reset a user's HWID")
-    .addUserOption(o => o.setName("user").setDescription("User whose HWID should be reset").setRequired(true)),
+    .setDescription("Reset HWID for a user or an entire role")
+    .addUserOption(o => o.setName("user").setDescription("User whose HWID should be reset").setRequired(false))
+    .addRoleOption(o => o.setName("role").setDescription("Role whose members' HWIDs should be reset").setRequired(false)),
   new SlashCommandBuilder()
     .setName("blacklist")
     .setDescription("Blacklist a user from your script")
@@ -1116,19 +1117,17 @@ function attachClientHandlers(client, botConfig) {
 }
 
 // ==================== PANEL EMBED ====================
-const PANEL_INSTRUCTIONS =
-  "📜 **How to use this panel**\n\n" +
-  "🔑 **Redeem Key** — Enter your key to unlock access.\n" +
-  "📜 **Get Script** — Download the script after you are whitelisted.\n" +
-  "👤 **Get Role** — Receive the server buyer role when available.\n" +
-  "⚙️ **Reset HWID** — Reset your hardware ID if your access is locked.\n" +
-  "📊 **Get Stats** — Check your access and key status.\n\n" +
-  "You must be whitelisted or redeem a valid key before getting the script.";
+function panelDescription(scriptName) {
+  return (
+    `This control panel is for the project: **${scriptName}**\n\n` +
+    "If you're a buyer, click on the buttons below to redeem your key, get the script or get your role."
+  );
+}
 
 async function sendPanelEmbed(channel, title, scriptId, scriptName, ownerId, guildId) {
   const embed = new EmbedBuilder()
     .setTitle(title)
-    .setDescription(PANEL_INSTRUCTIONS)
+    .setDescription(panelDescription(scriptName))
     .setColor(0xFFD700)
     .setFooter({ text: `THE LAB ✦ • ${scriptName}` })
     .setTimestamp();
@@ -1167,6 +1166,7 @@ async function handleInteraction(interaction) {
       const cid0 = interaction.customId || "";
       if (
         cid0.startsWith("get_script:") ||
+        cid0.startsWith("get_script_format:") ||
         cid0.startsWith("get_role:") ||
         cid0.startsWith("reset_hwid:") ||
         cid0.startsWith("get_stats:")
@@ -1183,6 +1183,7 @@ async function handleInteraction(interaction) {
       let sid = null;
       const cid = interaction.customId || "";
       if (cid.startsWith("get_script:")) sid = cid.split(":")[2] || null;
+      else if (cid.startsWith("get_script_format:")) sid = cid.split(":")[2] || null;
       else if (cid.startsWith("get_role:")) sid = cid.split(":")[1] || null;
       else if (cid.startsWith("reset_hwid:")) sid = cid.split(":")[1] || null;
       else if (cid.startsWith("get_stats:")) sid = cid.split(":")[1] || null;
@@ -1198,9 +1199,69 @@ async function handleInteraction(interaction) {
       }
     }
 
+    function scriptVersionRow(scriptId) {
+      return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`get_script_format:pc:${scriptId}`)
+          .setLabel("💻 PC Version")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`get_script_format:mobile:${scriptId}`)
+          .setLabel("📱 Mobile Version")
+          .setStyle(ButtonStyle.Success)
+      );
+    }
+
+    async function resolveLoaderCode(scriptId) {
+      let isFreeMode = false;
+      try {
+        const freeModeRes = await axios.get(`${CONFIG.apiBase}/api/freemode/${interaction.guildId}/${scriptId}`, {
+          headers: internalHeaders, timeout: 4000
+        });
+        isFreeMode = freeModeRes.data.freeMode === true;
+      } catch {
+        const cfg = readConfig()[interaction.guildId] || {};
+        isFreeMode = cfg.freeMode && cfg.freeMode[scriptId] === true;
+      }
+
+      if (isFreeMode) {
+        return { code: `loadstring(game:HttpGet("${CONFIG.apiBase}/api/loader/${scriptId}.lua"))()` };
+      }
+
+      const validKey = readKeys().find(k =>
+        String(k.userId) === String(interaction.user.id) &&
+        String(k.scriptId) === String(scriptId) &&
+        !(k.expiry && new Date(k.expiry) < new Date())
+      );
+      if (!validKey) return { code: null };
+      return {
+        code: `script_key = "${validKey.key}"\nloadstring(game:HttpGet("${CONFIG.apiBase}/api/loader/${validKey.scriptId}.lua"))()`
+      };
+    }
+
     // ==================== BUTTONS ====================
     if (interaction.isButton()) {
       const customId = interaction.customId;
+
+      if (customId.startsWith("get_script_format:")) {
+        if (!interaction.deferred && !interaction.replied) {
+          await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        }
+        try {
+          const [, format, scriptId] = customId.split(":");
+          const loader = await resolveLoaderCode(scriptId);
+          if (!loader.code) {
+            await interaction.editReply({ content: "⏳ One second...", components: [] }).catch(() => {});
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            return interaction.editReply({ content: "😂 Got you — you’re not whitelisted for this script.", components: [] }).catch(() => {});
+          }
+          const content = format === "mobile" ? loader.code : `\`\`\`lua\n${loader.code}\n\`\`\``;
+          return interaction.editReply({ content, components: [] }).catch(() => {});
+        } catch (err) {
+          console.error("Get script format error:", err);
+          return interaction.editReply({ content: "❌ Failed to prepare the script.", components: [] }).catch(() => {});
+        }
+      }
 
       if (customId.startsWith("get_script:")) {
         if (!interaction.deferred && !interaction.replied) {
@@ -1210,38 +1271,17 @@ async function handleInteraction(interaction) {
           const parts = customId.split(":");
           const scriptId = parts[2];
 
-          let isFreeMode = false;
-          try {
-            const freeModeRes = await axios.get(`${CONFIG.apiBase}/api/freemode/${interaction.guildId}/${scriptId}`, {
-              headers: internalHeaders, timeout: 4000
-            });
-            isFreeMode = freeModeRes.data.freeMode === true;
-          } catch (err) {
-            console.error(`❌ freemode check failed: ${describeAxiosError(err)}`);
-            const cfg = readConfig()[interaction.guildId] || {};
-            isFreeMode = cfg.freeMode && cfg.freeMode[scriptId] === true;
-          }
-
-          if (isFreeMode) {
-            const loaderCode = `loadstring(game:HttpGet("${CONFIG.apiBase}/api/loader/${scriptId}.lua"))()`;
-            return interaction.editReply({ content: `\`\`\`lua\n${loaderCode}\n\`\`\`` }).catch(() => {});
-          }
-
-          const keys = readKeys();
-          const validKey = keys.find(k =>
-            String(k.userId) === String(interaction.user.id) &&
-            String(k.scriptId) === String(scriptId) &&
-            !(k.expiry && new Date(k.expiry) < new Date())
-          );
-
-          if (!validKey) {
+          const loader = await resolveLoaderCode(scriptId);
+          if (!loader.code) {
             await interaction.editReply({ content: "⏳ One second..." }).catch(() => {});
             await new Promise(resolve => setTimeout(resolve, 1000));
             return interaction.editReply({ content: "😂 Got you — you’re not whitelisted for this script." }).catch(() => {});
           }
 
-          const loaderCode = `script_key = "${validKey.key}"\nloadstring(game:HttpGet("${CONFIG.apiBase}/api/loader/${validKey.scriptId}.lua"))()`;
-          return interaction.editReply({ content: `\`\`\`lua\n${loaderCode}\n\`\`\`` }).catch(() => {});
+          return interaction.editReply({
+            content: "Choose the version for your device:",
+            components: [scriptVersionRow(scriptId)]
+          }).catch(() => {});
         } catch (err) {
           console.error("Get script error:", err);
           return interaction.editReply({ content: "❌ Failed to get script. Please try again." }).catch(() => {});
@@ -2800,23 +2840,46 @@ async function handleInteraction(interaction) {
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
           const targetUser = interaction.options.getUser("user");
-          const keys = readKeys();
-          const userKeys = keys.filter(k => String(k.userId) === String(targetUser.id));
-          if (userKeys.length === 0) return interaction.editReply({ content: "❌ User doesn't have any key!" }).catch(() => {});
+          const rawRole = interaction.options.getRole("role");
+          if ((targetUser && rawRole) || (!targetUser && !rawRole)) {
+            return interaction.editReply({ content: "❌ Select either a user or a role, not both." }).catch(() => {});
+          }
 
+          let targetIds = new Set();
+          let targetLabel = "the selected users";
+          if (targetUser) {
+            targetIds.add(String(targetUser.id));
+            targetLabel = `<@${targetUser.id}>`;
+          } else {
+            const checked = validateRoleOption(interaction, rawRole);
+            if (!checked.ok) return interaction.editReply({ content: checked.error }).catch(() => {});
+            await interaction.guild.members.fetch().catch(() => {});
+            for (const member of checked.role.members.values()) {
+              if (!member.user.bot) targetIds.add(String(member.id));
+            }
+            targetLabel = `members of **${checked.role.name}**`;
+          }
+
+          const keys = readKeys();
+          let matchingKeys = 0;
           let resetCount = 0;
           const updatedKeys = keys.map(k => {
-            if (String(k.userId) === String(targetUser.id) && k.hwid) {
-              resetCount++;
-              return { ...k, hwid: null, lastHwidReset: new Date().toISOString() };
+            if (targetIds.has(String(k.userId))) {
+              matchingKeys++;
+              if (k.hwid) {
+                resetCount++;
+                return { ...k, hwid: null, lastHwidReset: new Date().toISOString() };
+              }
             }
             return k;
           });
 
-          if (resetCount === 0) return interaction.editReply({ content: "ℹ️ No HWID is registered for this user." }).catch(() => {});
-          writeKeys(updatedKeys);
-          return interaction.editReply({ content: `✅ HWID has been reset for <@${targetUser.id}>! (${resetCount} key(s))` }).catch(() => {});
-        } catch {
+          if (matchingKeys === 0) return interaction.editReply({ content: `❌ No keys were found for ${targetLabel}.` }).catch(() => {});
+          if (resetCount === 0) return interaction.editReply({ content: `ℹ️ No HWIDs are currently registered for ${targetLabel}.` }).catch(() => {});
+          await writeKeys(updatedKeys);
+          return interaction.editReply({ content: `✅ HWID reset for ${targetLabel}! (${resetCount} key(s), ${targetIds.size} member(s) checked)` }).catch(() => {});
+        } catch (err) {
+          console.error("resethwid failed:", err);
           return interaction.editReply({ content: "❌ Failed to reset HWID." }).catch(() => {});
         }
       }
