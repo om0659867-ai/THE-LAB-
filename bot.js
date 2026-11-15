@@ -932,7 +932,7 @@ const createExtras = function createExtras(ctx) {
           if (!isError) {
             const posted = await postWhitelistMessage(interaction, msg);
             await interaction.editReply({
-              content: posted ? "✅ Whitelist done. Message posted in the configured whitelist channel." : msg
+              content: posted ? `✅ Whitelist done for **${interaction.guild.name}**. Message posted in this server's configured whitelist channel.` : msg
             }).catch(() => {});
           } else {
             await interaction.editReply({ content: msg }).catch(() => {});
@@ -979,7 +979,7 @@ const createExtras = function createExtras(ctx) {
         if (!isError) {
           const posted = await postWhitelistMessage(interaction, msg);
           await interaction.editReply({
-            content: posted ? "✅ Whitelist done. Message posted in the configured whitelist channel." : msg,
+            content: posted ? `✅ Whitelist done for **${interaction.guild.name}**. Message posted in this server's configured whitelist channel.` : msg,
             components: []
           }).catch(() => {});
         } else {
@@ -1035,6 +1035,10 @@ const commands = [
     .setDescription("Blacklist a user from your script")
     .addUserOption(o => o.setName("user").setDescription("User to blacklist").setRequired(true))
     .addStringOption(o => o.setName("reason").setDescription("Reason").setRequired(false)),
+  new SlashCommandBuilder()
+    .setName("unblacklist")
+    .setDescription("Remove a user from the blacklist for this server's scripts")
+    .addUserOption(o => o.setName("user").setDescription("User to unblacklist").setRequired(true)),
   new SlashCommandBuilder()
     .setName("setwhitelistchannel")
     .setDescription("Choose the channel used for whitelist activity")
@@ -2674,59 +2678,37 @@ async function handleInteraction(interaction) {
         if (!hasPermission(interaction.member, interaction.guildId)) {
           return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
-        await interaction.deferReply({ ephemeral: false }).catch(() => {});
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
-          const targetUser = interaction.options.getUser("user");
-          const targetRole = interaction.options.getRole("role");
-
-          if (!targetUser && !targetRole) {
-            return interaction.editReply({ content: "❌ Select a user or role to unblacklist!" }).catch(() => {});
+          const targetUser = interaction.options.getUser("user", true);
+          const guildConfig = readConfig()[interaction.guildId] || {};
+          const currentGuildScriptIds = new Set();
+          if (guildConfig.panels && typeof guildConfig.panels === "object") {
+            for (const scriptId of Object.keys(guildConfig.panels)) currentGuildScriptIds.add(String(scriptId));
+          }
+          if (guildConfig.panelScriptId) currentGuildScriptIds.add(String(guildConfig.panelScriptId));
+          if (currentGuildScriptIds.size === 0) {
+            return interaction.editReply({ content: "❌ This server has no script panel configured." }).catch(() => {});
           }
 
-          if (targetRole) {
-            const isPrem = await checkPremium(interaction.user.id);
-            if (!isPrem) {
-              return interaction.editReply({
-                content: "❌ Unblacklisting **roles** is a Premium feature.\nYou can still unblacklist users on the Free plan.",
-                components: [new ActionRowBuilder().addComponents(
-                  new ButtonBuilder().setLabel("💎 Buy Premium").setStyle(ButtonStyle.Link).setURL(PREMIUM_INFO.discord)
-                )]
-              }).catch(() => {});
-            }
-          }
-
-          const bl = readBlacklist();
-          let removed = 0;
-
-          if (targetUser) {
-            const index = bl.findIndex(b => b.type !== "role" && String(b.userId) === String(targetUser.id));
-            if (index !== -1) { bl.splice(index, 1); removed++; }
-          }
-
-          if (targetRole) {
-            for (let i = bl.length - 1; i >= 0; i--) {
-              if (bl[i].type === "role" && String(bl[i].roleId) === String(targetRole.id)) {
-                bl.splice(i, 1);
-                removed++;
-              }
-            }
-          }
-
+          const blacklist = readBlacklist();
+          const matches = entry =>
+            entry.type !== "role" &&
+            String(entry.userId) === String(targetUser.id) &&
+            entry.scriptId != null &&
+            currentGuildScriptIds.has(String(entry.scriptId));
+          const removed = blacklist.filter(matches).length;
           if (removed === 0) {
-            return interaction.editReply({ content: "❌ Nothing to unblacklist (user/role not found)." }).catch(() => {});
+            return interaction.editReply({ content: `ℹ️ <@${targetUser.id}> is not blacklisted from this server's scripts.` }).catch(() => {});
           }
 
-          writeBlacklist(bl);
-
-          const parts = [];
-          if (targetUser) parts.push(`<@${targetUser.id}>`);
-          if (targetRole) parts.push(`<@&${targetRole.id}>`);
-
+          await writeBlacklist(blacklist.filter(entry => !matches(entry)));
           return interaction.editReply({
-            content: `✅ ${parts.join(" & ")} has been unblacklisted!`
+            content: `✅ <@${targetUser.id}> has been unblacklisted from this server's scripts. (${removed} blacklist entr${removed === 1 ? "y" : "ies"} removed)`
           }).catch(() => {});
-        } catch {
-          return interaction.editReply({ content: "❌ Failed to unblacklist." }).catch(() => {});
+        } catch (err) {
+          console.error("unblacklist error:", err);
+          return interaction.editReply({ content: "❌ Failed to unblacklist the user." }).catch(() => {});
         }
       }
 
