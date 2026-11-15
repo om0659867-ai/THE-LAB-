@@ -102,6 +102,34 @@ fs.mkdirSync(SCRIPTS_DIR, { recursive: true });
 app.use(express.json({ limit: "30mb" }));
 app.use(express.urlencoded({ extended: true, limit: "30mb" }));
 
+// ==================== REQUEST HARDENING ====================
+const requestBuckets = new Map();
+const REQUEST_WINDOW_MS = 60 * 1000;
+const REQUEST_LIMIT = 180;
+app.use((req, res, next) => {
+  const requestId = crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader("X-Request-ID", requestId);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (req.path.startsWith("/api/")) {
+    const key = `${req.ip}:${Math.floor(Date.now() / REQUEST_WINDOW_MS)}`;
+    const hits = (requestBuckets.get(key) || 0) + 1;
+    requestBuckets.set(key, hits);
+    if (hits > REQUEST_LIMIT) {
+      return res.status(429).json({ error: "Too many requests. Please try again shortly.", requestId });
+    }
+    if (requestBuckets.size > 5000) {
+      for (const [bucket] of requestBuckets) {
+        if (!bucket.endsWith(String(Math.floor(Date.now() / REQUEST_WINDOW_MS)))) requestBuckets.delete(bucket);
+      }
+    }
+  }
+  next();
+});
+
 // ==================== STATIC FILES ====================
 app.use(express.static(PUBLIC_DIR, {
   maxAge: "7d",
@@ -580,17 +608,34 @@ function xorScramble(buf, keyBuf) {
   return out;
 }
 
-/** Encrypt plaintext Lua → KM1 payload for disk storage */
-function protectSource(plain, scriptId) {
-  const key = deriveScriptKey(scriptId);
-  const enc = xorScramble(Buffer.from(String(plain), "utf8"), key);
-  return "KM1:" + enc.toString("base64");
+function deriveSourceAeadKey(scriptId) {
+  return crypto.createHmac("sha256", String(API_SECRET || "the-lab-fallback-key")).update(`source:${String(scriptId)}`).digest();
 }
 
-/** Decrypt KM1 payload (or pass-through legacy plaintext) */
+/** Encrypt plaintext Lua → versioned authenticated payload for storage. */
+function protectSource(plain, scriptId) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", deriveSourceAeadKey(scriptId), iv);
+  const enc = Buffer.concat([cipher.update(Buffer.from(String(plain), "utf8")), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `KM2:${iv.toString("base64url")}:${tag.toString("base64url")}:${enc.toString("base64url")}`;
+}
+
+/** Decrypt authenticated KM2, legacy KM1, or pass-through old plaintext. */
 function unprotectSource(stored, scriptId) {
   if (stored == null) return "";
   const s = String(stored);
+  if (s.startsWith("KM2:")) {
+    try {
+      const [, ivText, tagText, dataText] = s.split(":");
+      const decipher = crypto.createDecipheriv("aes-256-gcm", deriveSourceAeadKey(scriptId), Buffer.from(ivText, "base64url"));
+      decipher.setAuthTag(Buffer.from(tagText, "base64url"));
+      return Buffer.concat([decipher.update(Buffer.from(dataText, "base64url")), decipher.final()]).toString("utf8");
+    } catch (e) {
+      console.error("Authenticated source decrypt failed:", e.message);
+      return "";
+    }
+  }
   if (!s.startsWith("KM1:")) return s; // legacy plaintext uploads
   try {
     const key = deriveScriptKey(scriptId);
@@ -1185,12 +1230,127 @@ function obfuscateByMode(source, mode) {
   if (m === "light") return obfuscateLuaLight(source);
   if (m === "luau51" || m === "luau" || m === "lua51" || m === "5.1") return obfuscateLuaLuau51(source);
   if (m === "strong") {
-    // Kingmor core + forced decoy-heavy pass: run kingmor twice-wrap is too heavy;
-    // use kingmor output as-is (already has decoy). Alias for clarity in UI.
-    return obfuscateLua(source);
+    // Fortress wraps the generated VM once more for smaller standalone payloads.
+    // Large scripts stay on the proven single-pass path to avoid runaway output size.
+    const first = obfuscateLua(source);
+    return Buffer.byteLength(first, "utf8") <= 320 * 1024 ? obfuscateLua(first) : first;
   }
   // default: THE LAB Obf
   return obfuscateLua(source);
+}
+
+const PROTECTION_PROFILES = {
+  compatibility: {
+    id: "compatibility",
+    name: "Compatibility",
+    description: "Portable delivery with the fewest runtime assumptions.",
+    mode: "luau51",
+    score: 62,
+  },
+  balanced: {
+    id: "balanced",
+    name: "Balanced",
+    description: "THE LAB multi-layer protection with strong compatibility defaults.",
+    mode: "kingmor",
+    score: 84,
+  },
+  fortress: {
+    id: "fortress",
+    name: "Fortress",
+    description: "Maximum reverse-engineering cost with heavier output and stricter runtime checks.",
+    mode: "strong",
+    score: 94,
+  },
+};
+
+function normalizeProtectionSettings(input = {}) {
+  const raw = input && typeof input === "object" ? input : {};
+  const profile = PROTECTION_PROFILES[String(raw.profile || "balanced").toLowerCase()] || PROTECTION_PROFILES.balanced;
+  const mode = ["kingmor", "strong", "luau51", "light"].includes(String(raw.mode || "").toLowerCase())
+    ? String(raw.mode).toLowerCase()
+    : profile.mode;
+  return {
+    profile: profile.id,
+    mode,
+    runtimeIntegrity: raw.runtimeIntegrity !== false,
+    antiTamper: raw.antiTamper !== false,
+    decoyLevel: Math.max(0, Math.min(3, Number.isFinite(Number(raw.decoyLevel)) ? Number(raw.decoyLevel) : (profile.id === "fortress" ? 3 : 1))),
+    watermark: typeof raw.watermark === "string" ? raw.watermark.trim().slice(0, 120) : "",
+  };
+}
+
+function analyzeLuaSource(source) {
+  const text = String(source || "");
+  const lines = text.split(/\r?\n/);
+  const findings = [];
+  const add = (severity, code, title, detail, line = null, fix = "") => findings.push({ severity, code, title, detail, line, fix });
+  const count = (re) => (text.match(re) || []).length;
+  const bytes = Buffer.byteLength(text, "utf8");
+  const hasFunction = /\bfunction\b|\b(local\s+)?function\b/.test(text);
+  const hasDynamicLoad = /\b(loadstring|load)\s*\(/i.test(text);
+  const hasHttp = /\b(HttpGet|GetAsync|HttpService|request|http_request|syn\.request)\b/i.test(text);
+  const hasHwid = /RbxAnalyticsService|GetClientId|hwid|script[_-]?key/i.test(text);
+  const hasInfiniteLoop = /while\s+true\s+do|repeat\b[\s\S]{0,120}until\s+false/i.test(text);
+  const hasGlobalWrites = /(?:^|\n)\s*(?:_G|shared)\s*\[[^\]]+\]\s*=/.test(text);
+  const longLines = lines.reduce((n, line, i) => line.length > 240 ? n + 1 : n, 0);
+  const comments = count(/(^|\n)\s*--/g);
+
+  if (!text.trim()) add("error", "EMPTY_SOURCE", "No Lua source", "Paste or upload Lua source before running protection analysis.", 1, "Add a Lua script.");
+  if (bytes > 10 * 1024 * 1024) add("warning", "LARGE_SOURCE", "Large payload", `${(bytes / 1048576).toFixed(1)} MB source may require packed delivery and longer startup time.`, null, "Split optional modules or use Fortress only when needed.");
+  if (!hasFunction) add("info", "NO_FUNCTIONS", "Flat script", "No function declarations were detected. This is valid Lua, but modularizing large scripts can improve maintainability.");
+  if (hasDynamicLoad) add("warning", "DYNAMIC_LOAD", "Dynamic execution detected", "load/loadstring makes static analysis and debugging harder and can execute untrusted text.", null, "Validate the input and keep dynamic code behind an explicit trust boundary.");
+  if (hasHttp) add("warning", "NETWORK_ACCESS", "Network access detected", "The script performs HTTP or executor-request operations. Keep endpoints authenticated and avoid embedding long-lived secrets.", null, "Use the protected loader gate and rotate server credentials.");
+  if (hasHwid) add("info", "IDENTITY_GATE", "Identity/HWID logic detected", "The script already references identity, HWID, or script-key concepts; verify failures are user-friendly.");
+  if (hasInfiniteLoop) add("warning", "UNBOUNDED_LOOP", "Unbounded loop detected", "An always-on loop can impact frame rate or executor stability.", null, "Add a wait/yield and an exit condition.");
+  if (hasGlobalWrites) add("warning", "GLOBAL_STATE", "Global state mutation", "Writes to _G/shared can collide with other scripts and expose mutable state.", null, "Prefer local modules or namespaced state.");
+  if (longLines > 8) add("info", "LONG_LINES", "Dense source", `${longLines} lines exceed 240 characters and may be difficult to debug on mobile.`, null, "Format generated or embedded payloads before analysis.");
+  if (comments < 2 && lines.length > 80) add("info", "LOW_DOCUMENTATION", "Low documentation density", "Large scripts with few comments are harder to maintain and diagnose.", null, "Document public functions and network boundaries.");
+  if (/getgenv\s*\(\)\s*\[|_G\s*\[|shared\s*\[/i.test(text)) add("info", "EXECUTOR_ENV", "Executor environment access", "Environment reads vary by executor and can reduce portability.", null, "Add compatibility fallbacks and keep environment reads isolated.");
+
+  const errors = findings.filter((f) => f.severity === "error").length;
+  const warnings = findings.filter((f) => f.severity === "warning").length;
+  const score = Math.max(0, Math.min(100, 100 - errors * 40 - warnings * 8 - (hasDynamicLoad ? 4 : 0)));
+  return {
+    version: "lab-lua-analyzer-1",
+    sourceBytes: bytes,
+    lineCount: lines.length,
+    functionCount: count(/\bfunction\b/g),
+    score,
+    grade: score >= 90 ? "A" : score >= 75 ? "B" : score >= 55 ? "C" : "D",
+    summary: errors ? "Fix the blocking source issue before protecting this script." : warnings ? "The script is protectable, but review the warnings before shipping." : "No high-risk patterns were detected by the local analyzer.",
+    findings,
+  };
+}
+
+async function askLuaCopilot(source, question = "Review this Lua script and explain the highest-impact improvements.") {
+  const analysis = analyzeLuaSource(source);
+  const apiKey = process.env.AI_API_KEY;
+  const apiBase = String(process.env.AI_API_BASE || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const model = process.env.AI_MODEL;
+  if (!apiKey || !model) {
+    return {
+      provider: "local-analyzer",
+      answer: `${analysis.summary} ${analysis.findings.slice(0, 3).map((f) => f.title + ": " + f.detail).join(" ") || "The script is ready for protection."}`,
+      analysis,
+    };
+  }
+  const clipped = String(source || "").slice(0, 120000);
+  try {
+    const response = await axios.post(`${apiBase}/chat/completions`, {
+      model,
+      temperature: 0.15,
+      max_tokens: 900,
+      messages: [
+        { role: "system", content: "You are THE LAB Lua Copilot. Give concise, practical Lua/Luau debugging and protection advice. Do not claim obfuscation makes client code secret. Never invent runtime APIs." },
+        { role: "user", content: `${question}\n\nStatic analyzer result:\n${JSON.stringify(analysis)}\n\nLua source:\n${clipped}` },
+      ],
+    }, { headers: { Authorization: `Bearer ${apiKey}` }, timeout: 20000 });
+    const answer = response.data?.choices?.[0]?.message?.content;
+    if (typeof answer === "string" && answer.trim()) return { provider: "ai", answer: answer.trim(), analysis };
+  } catch (error) {
+    console.warn("Lua Copilot provider unavailable:", error.response?.status || error.code || error.message);
+  }
+  return { provider: "local-analyzer", answer: `${analysis.summary} Review the diagnostics below before shipping.`, analysis };
 }
 
 function scrambleSlice(plainBuf, key, seed, start, length) {
@@ -3391,23 +3551,38 @@ app.get("/obf", requireAuth, (req, res) => {
 
   <section class="form">
     <input id="obfName" placeholder="Output filename (optional) e.g. myhub_obf" value="script_obf">
-    <label class="l" for="obfMode" style="margin-top:12px">Obfuscation mode</label>
-    <select id="obfMode" style="width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--line2);background:var(--panel);color:var(--text);font:inherit;margin-bottom:8px">
+    <label class="l" for="obfProfile" style="margin-top:12px">Protection profile</label>
+    <select id="obfProfile" style="width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--line2);background:var(--panel);color:var(--ink);font:inherit;margin-bottom:8px">
+      <option value="balanced" selected>Balanced — strong protection, broad compatibility</option>
+      <option value="fortress">Fortress — maximum deterrence, heavier output</option>
+      <option value="compatibility">Compatibility — portable Luau / Lua 5.1 delivery</option>
+    </select>
+    <label class="l" for="obfMode" style="margin-top:12px">Engine mode</label>
+    <select id="obfMode" style="width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--line2);background:var(--panel);color:var(--ink);font:inherit;margin-bottom:8px">
       <option value="kingmor" selected>THE LAB Obf (default)</option>
       <option value="luau51">Luau / Lua 5.1</option>
       <option value="light">Light (max compatibility)</option>
       <option value="strong">Strong (THE LAB + heavier look)</option>
     </select>
     <p id="obfModeDesc" style="color:var(--mute);font-size:13px;margin:0 0 14px">Default — custom VM + multi-layer encrypt (strongest menu option)</p>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:2px 0 12px">
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px"><input id="runtimeIntegrity" type="checkbox" checked style="width:17px;height:17px;accent-color:var(--gold)"> Runtime integrity</label>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px"><input id="antiTamper" type="checkbox" checked style="width:17px;height:17px;accent-color:var(--gold)"> Anti-tamper posture</label>
+    </div>
     <div class="file-row">
       <label class="btn btn-ghost btn-sm" for="obfFile">Choose .lua / .txt file</label>
       <input id="obfFile" type="file" accept=".lua,.txt,text/plain">
       <span id="obfFileName">No file selected</span>
     </div>
     <textarea id="obfSource" placeholder="Or paste your Lua source here" style="min-height:280px"></textarea>
-    <button class="btn btn-gold" id="obfBtn" onclick="runObf()" ${left <= 0 ? "disabled" : ""}>
-      ${left <= 0 ? "Quota reached" : "Obfuscate & download"}
-    </button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;grid-column:1/-1">
+      <button class="btn btn-ghost" id="analyzeBtn" onclick="analyzeLua()">Run protection analysis</button>
+      <button class="btn btn-ghost" id="copilotBtn" onclick="askCopilot()">Ask Lua Copilot</button>
+      <button class="btn btn-gold" id="obfBtn" onclick="runObf()" ${left <= 0 ? "disabled" : ""}>
+        ${left <= 0 ? "Quota reached" : "Ship hardened loader"}
+      </button>
+    </div>
+    <div id="analysisPanel" class="workspace-panel" style="display:none;grid-column:1/-1;margin-top:2px;text-align:left"></div>
   </section>
 </main>
 `,
@@ -3434,15 +3609,42 @@ var MODE_DESC={
   if(sel&&desc){
     sel.addEventListener('change',function(){ desc.textContent=MODE_DESC[sel.value]||''; });
   }
+  var profile=$('obfProfile');
+  if(profile){
+    profile.addEventListener('change',function(){
+      var map={fortress:'strong',compatibility:'luau51',balanced:'kingmor'};
+      if($('obfMode')) $('obfMode').value=map[profile.value]||'kingmor';
+    });
+  }
 })();
+function renderAnalysis(data, copilotText){
+  var panel=$('analysisPanel'); if(!panel)return;
+  var a=data.analysis||data; var fs=a.findings||[];
+  var rows=fs.length?fs.map(function(f){return '<div style="padding:11px 0;border-bottom:1px solid var(--line)"><b style="color:'+(f.severity==='warning'?'var(--gold)':f.severity==='error'?'var(--bad)':'var(--cyan)')+'">'+f.severity.toUpperCase()+' · '+f.title+'</b><div style="color:var(--mute);font-size:13px;margin-top:3px">'+f.detail+'</div>'+(f.fix?'<div style="color:var(--ink);font-size:12px;margin-top:4px">Next: '+f.fix+'</div>':'')+'</div>';}).join(''):'<div style="color:var(--ok)">No high-risk patterns detected.</div>';
+  panel.style.display='block';
+  panel.innerHTML='<div class="panel-kicker">LAB / ANALYSIS</div><h3 style="margin:0 0 5px">Protection score '+a.score+'/100 · Grade '+a.grade+'</h3><p class="panel-copy">'+a.summary+'</p>'+(copilotText?'<div style="margin-top:14px;padding:13px;border:1px solid rgba(99,199,255,.25);border-radius:12px;background:rgba(99,199,255,.06)"><b>Lua Copilot</b><div style="color:var(--mute);font-size:13px;margin-top:5px;white-space:pre-wrap">'+copilotText+'</div></div>':'')+'<div style="margin-top:14px">'+rows+'</div>';
+}
+async function analyzeLua(){
+  var source=$('obfSource').value; if(!source.trim()){toast('Add Lua source first','err');return;}
+  var b=$('analyzeBtn');b.disabled=true;b.textContent='Analyzing...';
+  try{var r=await fetch('/api/lua/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:source})});var d=await r.json();if(!r.ok)throw new Error(d.error||'Analysis failed');renderAnalysis(d);toast('Protection analysis ready','ok');}catch(e){toast(e.message||'Analysis failed','err');}finally{b.disabled=false;b.textContent='Run protection analysis';}
+}
+async function askCopilot(){
+  var source=$('obfSource').value; if(!source.trim()){toast('Add Lua source first','err');return;}
+  var b=$('copilotBtn');b.disabled=true;b.textContent='Thinking...';
+  try{var r=await fetch('/api/lua/copilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:source,question:'Find bugs, portability risks, and the three highest-impact improvements for this Lua script.'})});var d=await r.json();if(!r.ok)throw new Error(d.error||'Copilot failed');renderAnalysis(d,d.answer);toast('Copilot review ready','ok');}catch(e){toast(e.message||'Copilot failed','err');}finally{b.disabled=false;b.textContent='Ask Lua Copilot';}
+}
+
 async function runObf(){
   var source=$('obfSource').value;
   var name=($('obfName').value||'script_obf').trim().replace(/[^a-zA-Z0-9._-]+/g,'_') || 'script_obf';
   var mode=($('obfMode')&&$('obfMode').value)||'kingmor';
+  var profile=($('obfProfile')&&$('obfProfile').value)||'balanced';
+  var protection={profile:profile,mode:mode,runtimeIntegrity:!!$('runtimeIntegrity')&&$('runtimeIntegrity').checked,antiTamper:!!$('antiTamper')&&$('antiTamper').checked};
   if(!source.trim()){toast('Paste or upload a Lua script first','err');return;}
   var b=$('obfBtn'); b.disabled=true; b.textContent='Obfuscating...';
   try{
-    var r=await fetch('/api/obf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:source,name:name,mode:mode})});
+    var r=await fetch('/api/obf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:source,name:name,mode:mode,profile:profile,protection:protection})});
     if(!r.ok){
       var d={}; try{d=await r.json()}catch(e){}
       toast(d.error||('OBF failed ('+r.status+')'),'err');
@@ -3458,7 +3660,7 @@ async function runObf(){
     a.download=fname;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(a.href);
-    toast('Obfuscated file downloaded','ok');
+    toast('Hardened loader downloaded','ok');
     setTimeout(function(){ location.reload(); }, 600);
   }catch(e){
     toast('Server error','err');
@@ -3471,7 +3673,7 @@ async function runObf(){
 
 app.post("/api/obf", requireAuth, (req, res) => {
   const userId = String(req.session.user.id);
-  const { source, name, mode } = req.body || {};
+  const { source, name, mode, profile, protection } = req.body || {};
   if (!source || typeof source !== "string" || !source.trim()) {
     return res.status(400).json({ error: "Lua source is required" });
   }
@@ -3490,9 +3692,14 @@ app.post("/api/obf", requireAuth, (req, res) => {
     });
   }
 
+  const protectionSettings = normalizeProtectionSettings({
+    ...(protection && typeof protection === "object" ? protection : {}),
+    profile: profile || protection?.profile,
+    mode: mode || protection?.mode,
+  });
   let out;
   try {
-    out = obfuscateByMode(source, mode || "kingmor");
+    out = obfuscateByMode(source, protectionSettings.mode);
   } catch (e) {
     console.error("standalone obf failed:", e);
     return res.status(500).json({ error: "Obfuscation failed" });
@@ -3511,7 +3718,24 @@ app.post("/api/obf", requireAuth, (req, res) => {
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.setHeader("X-Obf-Used", String(newCount));
   res.setHeader("X-Obf-Limit", String(limit));
+  res.setHeader("X-Lab-Protection-Profile", protectionSettings.profile);
   return res.send(out);
+});
+
+app.post("/api/lua/analyze", requireAuth, (req, res) => {
+  const source = req.body?.source;
+  if (typeof source !== "string" || !source.trim()) return res.status(400).json({ error: "Lua source is required", requestId: req.requestId });
+  if (source.length > MAX_SOURCE_CHARS) return res.status(413).json({ error: "Lua source exceeds the 25MB limit", requestId: req.requestId });
+  return res.json({ success: true, analysis: analyzeLuaSource(source), requestId: req.requestId });
+});
+
+app.post("/api/lua/copilot", requireAuth, async (req, res) => {
+  const source = req.body?.source;
+  const question = typeof req.body?.question === "string" ? req.body.question.slice(0, 800) : undefined;
+  if (typeof source !== "string" || !source.trim()) return res.status(400).json({ error: "Lua source is required", requestId: req.requestId });
+  if (source.length > MAX_SOURCE_CHARS) return res.status(413).json({ error: "Lua source exceeds the 25MB limit", requestId: req.requestId });
+  const result = await askLuaCopilot(source, question);
+  return res.json({ success: true, ...result, requestId: req.requestId });
 });
 
 app.get("/dashboard", requireAuth, (req, res) => {
@@ -3585,6 +3809,23 @@ app.get("/dashboard", requireAuth, (req, res) => {
     <div class="stat"><b>${scripts.filter((s) => s.enabled).length}</b><span>Enabled scripts</span></div>
     <div class="stat"><b>${totalKeys}</b><span>Keys you generated</span></div>
   </div>
+
+  <section class="workspace-grid" style="margin-top:18px">
+    <div class="workspace-panel">
+      <div class="panel-kicker">LAB / POSTURE</div>
+      <h2>Protection posture</h2>
+      <p class="panel-copy">New uploads use authenticated storage protection. Use the Protection Lab to analyze portability risks before shipping a loader.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
+        <a class="btn btn-gold btn-sm" href="/obf">Open Protection Lab</a>
+        <a class="btn btn-ghost btn-sm" href="/health" target="_blank" rel="noopener">Check service health</a>
+      </div>
+    </div>
+    <div class="workspace-panel">
+      <div class="panel-kicker">LAB / SIGNALS</div>
+      <h2>Delivery guidance</h2>
+      <p class="panel-copy">Balanced is the default for most scripts. Choose Fortress for higher reverse-engineering cost, or Compatibility for older Luau/Lua 5.1 runtimes.</p>
+    </div>
+  </section>
 
   <div class="h-row"><h2>Upload a script</h2><div class="ln"></div></div>
   ${limitAlert}
