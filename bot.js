@@ -1117,17 +1117,19 @@ function attachClientHandlers(client, botConfig) {
 }
 
 // ==================== PANEL EMBED ====================
-function panelDescription(scriptName) {
+function panelDescription(scriptName, ownerId) {
   return (
     `This control panel is for the project: **${scriptName}**\n\n` +
-    "If you're a buyer, click on the buttons below to redeem your key, get the script or get your role."
+    "If you're a buyer, click on the buttons below to redeem your key, get the script or get your role.\n\n" +
+    `**Script:** ${scriptName}\n` +
+    `**Sent by:** <@${ownerId}>`
   );
 }
 
 async function sendPanelEmbed(channel, title, scriptId, scriptName, ownerId, guildId) {
   const embed = new EmbedBuilder()
     .setTitle(title)
-    .setDescription(panelDescription(scriptName))
+    .setDescription(panelDescription(scriptName, ownerId))
     .setColor(0xFFD700)
     .setFooter({ text: `Sent by ${ownerId} | ${scriptName}` });
 
