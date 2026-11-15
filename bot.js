@@ -1129,8 +1129,7 @@ async function sendPanelEmbed(channel, title, scriptId, scriptName, ownerId, gui
     .setTitle(title)
     .setDescription(panelDescription(scriptName))
     .setColor(0xFFD700)
-    .setFooter({ text: `THE LAB ✦ • ${scriptName}` })
-    .setTimestamp();
+    .setFooter({ text: `Sent by ${ownerId} | ${scriptName}` });
 
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("redeem_key").setLabel("Redeem Key").setEmoji("🔑").setStyle(ButtonStyle.Success),
