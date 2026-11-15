@@ -1009,9 +1009,8 @@ const commands = [
     .addRoleOption(o => o.setName("role").setDescription("Role given to users with a key").setRequired(true)),
   new SlashCommandBuilder()
     .setName("setuppanel")
-    .setDescription("Set up a script panel")
-    .addStringOption(o => o.setName("title").setDescription("Panel title").setRequired(true))
-    .addStringOption(o => o.setName("description").setDescription("Panel description").setRequired(true)),
+    .setDescription("Set up a script panel with usage instructions")
+    .addStringOption(o => o.setName("title").setDescription("Panel title").setRequired(true)),
   new SlashCommandBuilder()
     .setName("resethwid")
     .setDescription("Reset a user's HWID")
@@ -1117,17 +1116,26 @@ function attachClientHandlers(client, botConfig) {
 }
 
 // ==================== PANEL EMBED ====================
-async function sendPanelEmbed(channel, title, description, scriptId, scriptName, ownerId, guildId) {
+const PANEL_INSTRUCTIONS =
+  "📜 **How to use this panel**\n\n" +
+  "🔑 **Redeem Key** — Enter your key to unlock access.\n" +
+  "📜 **Get Script** — Download the script after you are whitelisted.\n" +
+  "👤 **Get Role** — Receive the server buyer role when available.\n" +
+  "⚙️ **Reset HWID** — Reset your hardware ID if your access is locked.\n" +
+  "📊 **Get Stats** — Check your access and key status.\n\n" +
+  "You must be whitelisted or redeem a valid key before getting the script.";
+
+async function sendPanelEmbed(channel, title, scriptId, scriptName, ownerId, guildId) {
   const embed = new EmbedBuilder()
     .setTitle(title)
-    .setDescription(description)
+    .setDescription(PANEL_INSTRUCTIONS)
     .setColor(0xFFD700)
     .setFooter({ text: `THE LAB ✦ • ${scriptName}` })
     .setTimestamp();
 
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("redeem_key").setLabel("Redeem Key").setEmoji("🔑").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`get_script:${ownerId}:${scriptId}`).setLabel("Get Script").setEmoji("👑").setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId(`get_script:${ownerId}:${scriptId}`).setLabel("📜 Get Script").setStyle(ButtonStyle.Primary)
   );
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`get_role:${scriptId}`).setLabel("Get Role").setEmoji("👤").setStyle(ButtonStyle.Primary),
@@ -1663,7 +1671,7 @@ async function handleInteraction(interaction) {
           const scriptId = interaction.values[0];
           const tempData = panelTempData.get(interaction.user.id);
           if (!tempData) return interaction.editReply({ content: "❌ Session expired." }).catch(() => {});
-          const { title, description } = tempData;
+          const { title } = tempData;
           panelTempData.delete(interaction.user.id);
 
           const myScripts = await getScriptsByOwner(interaction.user.id);
@@ -1676,7 +1684,7 @@ async function handleInteraction(interaction) {
           }
           if (!selectedScript) return interaction.editReply({ content: "❌ Script not found or not yours!" }).catch(() => {});
 
-          await sendPanelEmbed(interaction.channel, title, description, scriptId, selectedScript.name, interaction.user.id, interaction.guildId);
+          await sendPanelEmbed(interaction.channel, title, scriptId, selectedScript.name, interaction.user.id, interaction.guildId);
           const used1 = limitInfo.replacing ? limitInfo.count : Math.min(limitInfo.count + 1, limitInfo.max);
           return interaction.editReply({
             content: `✅ Panel ${limitInfo.replacing ? "updated" : "created"} with script: **${selectedScript.name}**!\nPanel usage: **${used1}/${limitInfo.max}**`
@@ -2031,13 +2039,38 @@ async function handleInteraction(interaction) {
           }
           if (commandName === "changeprofilepic") {
             const image = interaction.options.getAttachment("image");
-            if (!image || !/^image\/(png|jpe?g|gif|webp)$/i.test(image.contentType || "")) return interaction.editReply({ content: "❌ Upload a PNG, JPG, GIF, or WEBP image." }).catch(() => {});
-            await interaction.guild.members.editMe({ avatar: image.url });
+            const imageType = String(image?.contentType || "").toLowerCase();
+            const imageName = String(image?.name || image?.url || "").toLowerCase();
+            const validImage = /^image\/(png|jpe?g|gif|webp)$/.test(imageType) || /\.(png|jpe?g|gif|webp)(?:\?|$)/i.test(imageName);
+            if (!image || !validImage) {
+              return interaction.editReply({ content: "❌ Upload a PNG, JPG, GIF, or WEBP image." }).catch(() => {});
+            }
+            const imageResponse = await axios.get(image.url, {
+              responseType: "arraybuffer",
+              timeout: 20000,
+              maxContentLength: 10 * 1024 * 1024,
+              maxBodyLength: 10 * 1024 * 1024
+            });
+            const avatarBuffer = Buffer.from(imageResponse.data);
+            if (!avatarBuffer.length) throw new Error("The uploaded image was empty.");
+            await interaction.guild.members.editMe({ avatar: avatarBuffer });
             return interaction.editReply({ content: `✅ Bot profile picture updated for **${interaction.guild.name}** only.` }).catch(() => {});
           }
           const name = interaction.options.getString("name", true).trim();
+          // Discord supports a server-specific nickname, but the account username is global.
+          // Apply both so the bot displays the full name in this server and updates its account name.
           await interaction.guild.members.editMe({ nick: name });
-          return interaction.editReply({ content: `✅ Bot server name changed to **${name}** in **${interaction.guild.name}** only.` }).catch(() => {});
+          let globalNameUpdated = true;
+          try {
+            await interaction.client.user.setUsername(name);
+          } catch (usernameErr) {
+            globalNameUpdated = false;
+            console.warn("Global bot username update failed; server nickname was updated:", usernameErr?.message || usernameErr);
+          }
+          return interaction.editReply({ content: globalNameUpdated
+            ? `✅ Bot name changed to **${name}** in **${interaction.guild.name}**. The server nickname is server-specific; Discord also updated the bot account username globally.`
+            : `✅ Bot nickname changed to **${name}** in **${interaction.guild.name}**. Discord did not allow the global username update.`
+          }).catch(() => {});
         } catch (err) {
           console.error(`${commandName} failed:`, err);
           return interaction.editReply({ content: "❌ Discord rejected the change or rate-limited the bot. Try again later." }).catch(() => {});
@@ -2237,19 +2270,18 @@ async function handleInteraction(interaction) {
 
         try {
           const title = interaction.options.getString("title");
-          const description = interaction.options.getString("description");
           const myScripts = await getScriptsByOwner(interaction.user.id);
           if (myScripts.length === 0) return interaction.editReply({ content: "❌ You don't have any scripts yet." }).catch(() => {});
 
           if (myScripts.length === 1) {
-            await sendPanelEmbed(interaction.channel, title, description, myScripts[0].id, myScripts[0].name, interaction.user.id, interaction.guildId);
+            await sendPanelEmbed(interaction.channel, title, myScripts[0].id, myScripts[0].name, interaction.user.id, interaction.guildId);
             const used0 = limitInfo.replacing ? limitInfo.count : Math.min(limitInfo.count + 1, limitInfo.max);
             return interaction.editReply({
               content: `✅ Panel ${limitInfo.replacing ? "updated" : "created"} with script: **${myScripts[0].name}**!\nPanel usage: **${used0}/${limitInfo.max}**`
             }).catch(() => {});
           }
 
-          panelTempData.set(interaction.user.id, { title, description });
+          panelTempData.set(interaction.user.id, { title });
           setTimeout(() => panelTempData.delete(interaction.user.id), 5 * 60 * 1000);
 
           const select = new StringSelectMenuBuilder()
