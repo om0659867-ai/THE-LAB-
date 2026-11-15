@@ -718,6 +718,10 @@ const createExtras = function createExtras(ctx) {
     if (String(panelInfo.guildId) !== String(interaction.guildId)) {
       return `❌ **${scriptInfo.name}** belongs to a panel in a different server. Use /whitelist in the server where this script panel is configured.`;
     }
+    const panelChannel = await interaction.guild.channels.fetch(String(panelInfo.channelId)).catch(() => null);
+    if (!panelChannel || String(panelChannel.guild?.id) !== String(interaction.guildId)) {
+      return `❌ **${scriptInfo.name}** has a panel channel from a different server. Run /setuppanel again in this server before using /whitelist.`;
+    }
 
     const keys = readKeys();
     const expiry = days === 0 ? null : new Date(Date.now() + days * 86400000).toISOString();
@@ -896,21 +900,23 @@ const createExtras = function createExtras(ctx) {
         const targetType = targetUser ? "user" : "role";
         const targetId = targetUser ? targetUser.id : targetRole.id;
 
-        // Only scripts owned by user that already have a panel
-        let candidates = await getScriptsByOwner(interaction.user.id);
-        // A whitelist command may only use scripts whose panel belongs to this server.
-        candidates = candidates.filter(s => {
-          const panel = findPanelForScript(s.id, interaction.guildId);
-          return Boolean(panel && panel.channelId);
-        });
+        // Build the list only from panels stored under THIS guild ID.
+        // Never use the owner's global script list here: that can expose scripts from other servers.
+        const guildConfig = readConfig()[interaction.guildId] || {};
+        const currentGuildScriptIds = new Set();
+        if (guildConfig.panels && typeof guildConfig.panels === "object") {
+          for (const scriptId of Object.keys(guildConfig.panels)) currentGuildScriptIds.add(String(scriptId));
+        }
+        if (guildConfig.panelScriptId) currentGuildScriptIds.add(String(guildConfig.panelScriptId));
 
-        if (candidates.length === 0) {
-          // Maybe staff using panel on this server only
-          const panel = getGuildPanelScript(interaction.guildId);
-          if (panel && panel.scriptId && findPanelForScript(panel.scriptId, interaction.guildId)) {
-            const info = await fetchScriptById(panel.scriptId);
-            if (info) candidates = [info];
-          }
+        const candidates = [];
+        for (const scriptId of currentGuildScriptIds) {
+          const panel = findPanelForScript(scriptId, interaction.guildId);
+          if (!panel || !panel.channelId) continue;
+          const panelChannel = await interaction.guild.channels.fetch(String(panel.channelId)).catch(() => null);
+          if (!panelChannel || String(panelChannel.guild?.id) !== String(interaction.guildId)) continue;
+          const info = await fetchScriptById(scriptId);
+          if (info) candidates.push(info);
         }
 
         if (candidates.length === 0) {
