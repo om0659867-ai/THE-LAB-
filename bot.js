@@ -714,6 +714,9 @@ const createExtras = function createExtras(ctx) {
     if (!panelInfo || !panelInfo.channelId) {
       return `❌ **${scriptInfo.name}** has no panel yet.\nRun \`/setuppanel\` for this script first before whitelisting.`;
     }
+    if (String(panelInfo.guildId) !== String(interaction.guildId)) {
+      return `❌ **${scriptInfo.name}** belongs to a panel in a different server. Use /whitelist in the server where this script panel is configured.`;
+    }
 
     const keys = readKeys();
     const expiry = days === 0 ? null : new Date(Date.now() + days * 86400000).toISOString();
@@ -894,7 +897,12 @@ const createExtras = function createExtras(ctx) {
 
         // Only scripts owned by user that already have a panel
         let candidates = await getScriptsByOwner(interaction.user.id);
-        candidates = candidates.filter(s => scriptHasPanel(s.id));
+        // A whitelist command may only use scripts whose panel belongs to this server.
+        candidates = candidates.filter(s => {
+          if (!scriptHasPanel(s.id)) return false;
+          const panel = findPanelForScript(s.id);
+          return panel && String(panel.guildId) === String(interaction.guildId);
+        });
 
         if (candidates.length === 0) {
           // Maybe staff using panel on this server only
