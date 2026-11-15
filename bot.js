@@ -705,9 +705,12 @@ const createExtras = function createExtras(ctx) {
     const scriptInfo = await fetchScriptById(scriptId);
     if (!scriptInfo) return "❌ That script no longer exists.";
 
-    const owns = String(scriptInfo.ownerId) === String(interaction.user.id);
-    if (!owns && !canWhitelist(interaction.member, interaction.guildId)) {
-      return "❌ You can only whitelist for your own scripts.";
+    const serverOwnerId = interaction.guild?.ownerId;
+    if (!serverOwnerId || String(scriptInfo.ownerId) !== String(serverOwnerId)) {
+      return "❌ This script is not owned by the owner of this Discord server. Only the server owner's scripts can be whitelisted here.";
+    }
+    if (!canWhitelist(interaction.member, interaction.guildId)) {
+      return "❌ You need the configured whitelist role or Administrator permission.";
     }
 
     // Script MUST have a panel set up
@@ -916,7 +919,7 @@ const createExtras = function createExtras(ctx) {
           const panelChannel = await interaction.guild.channels.fetch(String(panel.channelId)).catch(() => null);
           if (!panelChannel || String(panelChannel.guild?.id) !== String(interaction.guildId)) continue;
           const info = await fetchScriptById(scriptId);
-          if (info) candidates.push(info);
+          if (info && String(info.ownerId) === String(interaction.guild.ownerId)) candidates.push(info);
         }
 
         if (candidates.length === 0) {
