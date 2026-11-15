@@ -2098,19 +2098,10 @@ async function handleInteraction(interaction) {
             return interaction.editReply({ content: `✅ Bot profile picture updated for **${interaction.guild.name}** only.` }).catch(() => {});
           }
           const name = interaction.options.getString("name", true).trim();
-          // Discord supports a server-specific nickname, but the account username is global.
-          // Apply both so the bot displays the full name in this server and updates its account name.
+          // Discord account usernames are global. A guild nickname is the only server-specific name.
           await interaction.guild.members.editMe({ nick: name });
-          let globalNameUpdated = true;
-          try {
-            await interaction.client.user.setUsername(name);
-          } catch (usernameErr) {
-            globalNameUpdated = false;
-            console.warn("Global bot username update failed; server nickname was updated:", usernameErr?.message || usernameErr);
-          }
-          return interaction.editReply({ content: globalNameUpdated
-            ? `✅ Bot name changed to **${name}** in **${interaction.guild.name}**. The server nickname is server-specific; Discord also updated the bot account username globally.`
-            : `✅ Bot nickname changed to **${name}** in **${interaction.guild.name}**. Discord did not allow the global username update.`
+          return interaction.editReply({
+            content: `✅ Bot display name changed to **${name}** in **${interaction.guild.name}** only.`
           }).catch(() => {});
         } catch (err) {
           console.error(`${commandName} failed:`, err);
