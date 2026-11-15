@@ -464,9 +464,10 @@ function getGuildPanelScript(guildId) {
 }
 
 /** Find panel for a specific script across all guilds. Returns { guildId, channelId, ownerId, scriptId } or null */
-function findPanelForScript(scriptId) {
+function findPanelForScript(scriptId, guildIdFilter = null) {
   const cfg = readConfig();
   for (const guildId of Object.keys(cfg)) {
+    if (guildIdFilter && String(guildId) !== String(guildIdFilter)) continue;
     const g = cfg[guildId];
     if (!g) continue;
     if (g.panels && g.panels[scriptId]) {
@@ -710,7 +711,7 @@ const createExtras = function createExtras(ctx) {
     }
 
     // Script MUST have a panel set up
-    const panelInfo = findPanelForScript(scriptId);
+    const panelInfo = findPanelForScript(scriptId, interaction.guildId);
     if (!panelInfo || !panelInfo.channelId) {
       return `❌ **${scriptInfo.name}** has no panel yet.\nRun \`/setuppanel\` for this script first before whitelisting.`;
     }
@@ -899,15 +900,14 @@ const createExtras = function createExtras(ctx) {
         let candidates = await getScriptsByOwner(interaction.user.id);
         // A whitelist command may only use scripts whose panel belongs to this server.
         candidates = candidates.filter(s => {
-          if (!scriptHasPanel(s.id)) return false;
-          const panel = findPanelForScript(s.id);
-          return panel && String(panel.guildId) === String(interaction.guildId);
+          const panel = findPanelForScript(s.id, interaction.guildId);
+          return Boolean(panel && panel.channelId);
         });
 
         if (candidates.length === 0) {
           // Maybe staff using panel on this server only
           const panel = getGuildPanelScript(interaction.guildId);
-          if (panel && panel.scriptId && scriptHasPanel(panel.scriptId)) {
+          if (panel && panel.scriptId && findPanelForScript(panel.scriptId, interaction.guildId)) {
             const info = await fetchScriptById(panel.scriptId);
             if (info) candidates = [info];
           }
