@@ -1218,6 +1218,18 @@ async function handleInteraction(interaction) {
       }
     }
 
+    function notWhitelistedReply() {
+      const embed = new EmbedBuilder()
+        .setColor(0xFF0000)
+        .setTitle("Not whitelisted!")
+        .setDescription(
+          "You need to be whitelisted to get this script.\n\n" +
+          "If you have a script key, you need to redeem it first."
+        )
+        .setTimestamp();
+      return { embeds: [embed], components: [] };
+    }
+
     function scriptVersionRow(scriptId) {
       return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -1270,9 +1282,7 @@ async function handleInteraction(interaction) {
           const [, format, scriptId] = customId.split(":");
           const loader = await resolveLoaderCode(scriptId);
           if (!loader.code) {
-            await interaction.editReply({ content: "⏳ One second...", components: [] }).catch(() => {});
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            return interaction.editReply({ content: "😂 Got you — you’re not whitelisted for this script.", components: [] }).catch(() => {});
+            return interaction.editReply(notWhitelistedReply()).catch(() => {});
           }
           const content = format === "mobile" ? loader.code : `\`\`\`lua\n${loader.code}\n\`\`\``;
           return interaction.editReply({ content, components: [] }).catch(() => {});
@@ -1292,9 +1302,7 @@ async function handleInteraction(interaction) {
 
           const loader = await resolveLoaderCode(scriptId);
           if (!loader.code) {
-            await interaction.editReply({ content: "⏳ One second..." }).catch(() => {});
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            return interaction.editReply({ content: "😂 Got you — you’re not whitelisted for this script." }).catch(() => {});
+            return interaction.editReply(notWhitelistedReply()).catch(() => {});
           }
 
           return interaction.editReply({
